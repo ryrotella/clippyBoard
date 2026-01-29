@@ -307,4 +307,10 @@ class ClipboardService: ObservableObject {
             print("Failed to clear history: \(error)")
         }
     }
+
+    func copyTransformedText(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
 }

@@ -1,12 +1,14 @@
 import SwiftUI
 import SwiftData
 
-struct ClipboardPopover: View {
+// MARK: - Reusable Clipboard Content View
+
+struct ClipboardContentView: View {
     @EnvironmentObject private var clipboardService: ClipboardService
 
-    @State private var searchText = ""
-    @State private var selectedType: ContentType?
-    @State private var previewingImage: ClipboardItem?
+    @Binding var searchText: String
+    @Binding var selectedType: ContentType?
+    @Binding var previewingImage: ClipboardItem?
 
     private var items: [ClipboardItem] {
         clipboardService.items
@@ -40,11 +42,6 @@ struct ClipboardPopover: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            headerView
-
-            Divider()
-
             // Search bar
             searchBar
                 .padding(.horizontal, 12)
@@ -69,7 +66,6 @@ struct ClipboardPopover: View {
             // Footer
             footerView
         }
-        .frame(width: 340, height: 480)
         .sheet(item: $previewingImage) { item in
             ImagePreviewView(
                 imageData: item.content,
@@ -80,30 +76,6 @@ struct ClipboardPopover: View {
                 }
             )
         }
-    }
-
-    // MARK: - Header
-
-    private var headerView: some View {
-        HStack {
-            Image(systemName: "clipboard")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-
-            Text("ClipBoard")
-                .font(.headline)
-
-            Spacer()
-
-            Button(action: {}) {
-                Image(systemName: "gear")
-                    .font(.body)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
     }
 
     // MARK: - Search
@@ -229,6 +201,23 @@ struct ClipboardPopover: View {
             }
         }
 
+        // Transform submenu for text-based content
+        if item.contentTypeEnum == .text || item.contentTypeEnum == .url {
+            Menu {
+                ForEach(TextTransformation.allCases, id: \.self) { transform in
+                    Button(action: {
+                        if let text = item.textContent {
+                            clipboardService.copyTransformedText(transform.apply(to: text))
+                        }
+                    }) {
+                        Label(transform.rawValue, systemImage: transform.icon)
+                    }
+                }
+            } label: {
+                Label("Transform", systemImage: "wand.and.stars")
+            }
+        }
+
         Button(action: { clipboardService.togglePin(item) }) {
             Label(item.isPinned ? "Unpin" : "Pin", systemImage: item.isPinned ? "pin.slash" : "pin")
         }
@@ -288,6 +277,67 @@ struct ClipboardPopover: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Clipboard Popover
+
+struct ClipboardPopover: View {
+    @EnvironmentObject private var clipboardService: ClipboardService
+
+    @State private var searchText = ""
+    @State private var selectedType: ContentType?
+    @State private var previewingImage: ClipboardItem?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            headerView
+
+            Divider()
+
+            // Shared content
+            ClipboardContentView(
+                searchText: $searchText,
+                selectedType: $selectedType,
+                previewingImage: $previewingImage
+            )
+        }
+        .frame(width: 340, height: 480)
+    }
+
+    // MARK: - Header
+
+    private var headerView: some View {
+        HStack {
+            Image(systemName: "clipboard")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+
+            Text("ClipBoard")
+                .font(.headline)
+
+            Spacer()
+
+            Button(action: {
+                NotificationCenter.default.post(name: .openPopoutBoard, object: nil)
+            }) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.body)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Open in popout window (⌘⇧B)")
+
+            Button(action: {}) {
+                Image(systemName: "gear")
+                    .font(.body)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 }
 

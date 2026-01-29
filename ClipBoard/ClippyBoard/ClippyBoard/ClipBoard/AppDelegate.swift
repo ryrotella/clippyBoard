@@ -11,6 +11,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var screenshotService: ScreenshotService!
     private var modelContainer: ModelContainer!
     private var hotKeyRef: EventHotKeyRef?
+    private var popoutHotKeyRef: EventHotKeyRef?
+    private var popoutWindowController: PopoutBoardWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize model container
@@ -36,17 +38,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup popover
         setupPopover()
 
-        // Setup global hotkey
-        setupHotkey()
+        // Setup global hotkeys
+        setupHotkeys()
 
         // Observe capture events to animate icon
         setupCaptureObserver()
 
-        // Observe hotkey notification
+        // Observe hotkey notifications
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(togglePopover),
             name: .toggleClipboardPopover,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(togglePopoutBoard),
+            name: .togglePopoutBoard,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openPopoutBoard),
+            name: .openPopoutBoard,
             object: nil
         )
     }
@@ -108,22 +124,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = NSHostingController(rootView: contentView)
     }
 
-    private func setupHotkey() {
-        // Register ⌘⇧V globally using Carbon API
-        let hotKeyID = EventHotKeyID(signature: OSType(0x434C4950), id: 1) // "CLIP"
-
-        // V key = 0x09, Command = cmdKey, Shift = shiftKey
-        let keyCode: UInt32 = 0x09 // V key
-        let modifiers: UInt32 = UInt32(cmdKey | shiftKey)
-
+    private func setupHotkeys() {
+        // Install single event handler for all hotkeys
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
 
-        // Install event handler
         InstallEventHandler(
             GetApplicationEventTarget(),
             { (_, event, _) -> OSStatus in
-                // Post notification to toggle popover
-                NotificationCenter.default.post(name: .toggleClipboardPopover, object: nil)
+                // Extract hotkey ID to determine which hotkey was pressed
+                var hotKeyID = EventHotKeyID()
+                GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hotKeyID
+                )
+
+                switch hotKeyID.id {
+                case 1:
+                    NotificationCenter.default.post(name: .toggleClipboardPopover, object: nil)
+                case 2:
+                    NotificationCenter.default.post(name: .togglePopoutBoard, object: nil)
+                default:
+                    break
+                }
+
                 return noErr
             },
             1,
@@ -132,15 +160,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             nil
         )
 
-        // Register the hotkey
-        var hotKeyRef: EventHotKeyRef?
-        let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
+        // Register ⌘⇧V for popover toggle (id: 1)
+        let popoverHotKeyID = EventHotKeyID(signature: OSType(0x434C4950), id: 1) // "CLIP"
+        let vKeyCode: UInt32 = 0x09 // V key
+        let modifiers: UInt32 = UInt32(cmdKey | shiftKey)
 
-        if status == noErr {
-            self.hotKeyRef = hotKeyRef
+        var popoverRef: EventHotKeyRef?
+        let popoverStatus = RegisterEventHotKey(vKeyCode, modifiers, popoverHotKeyID, GetApplicationEventTarget(), 0, &popoverRef)
+
+        if popoverStatus == noErr {
+            self.hotKeyRef = popoverRef
             print("Global hotkey ⌘⇧V registered successfully")
         } else {
-            print("Failed to register global hotkey: \(status)")
+            print("Failed to register global hotkey ⌘⇧V: \(popoverStatus)")
+        }
+
+        // Register ⌘⇧B for popout board toggle (id: 2)
+        let popoutHotKeyID = EventHotKeyID(signature: OSType(0x434C4950), id: 2) // "CLIP"
+        let bKeyCode: UInt32 = 0x0B // B key
+
+        var popoutRef: EventHotKeyRef?
+        let popoutStatus = RegisterEventHotKey(bKeyCode, modifiers, popoutHotKeyID, GetApplicationEventTarget(), 0, &popoutRef)
+
+        if popoutStatus == noErr {
+            self.popoutHotKeyRef = popoutRef
+            print("Global hotkey ⌘⇧B registered successfully")
+        } else {
+            print("Failed to register global hotkey ⌘⇧B: \(popoutStatus)")
         }
     }
 
@@ -215,10 +261,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Popout Board
+
+    @objc func togglePopoutBoard() {
+        ensurePopoutWindowController()
+        popoutWindowController?.toggleWindow()
+    }
+
+    @objc func openPopoutBoard() {
+        // Close popover first if it's shown
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+
+        // Refresh items before showing
+        clipboardService.refreshItems()
+
+        ensurePopoutWindowController()
+        popoutWindowController?.showWindow()
+    }
+
+    private func ensurePopoutWindowController() {
+        if popoutWindowController == nil {
+            popoutWindowController = PopoutBoardWindowController.createShared(
+                clipboardService: clipboardService,
+                modelContainer: modelContainer
+            )
+        }
+    }
+
     deinit {
-        // Unregister hotkey on cleanup
+        // Unregister hotkeys on cleanup
         if let hotKeyRef = hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
+        }
+        if let popoutHotKeyRef = popoutHotKeyRef {
+            UnregisterEventHotKey(popoutHotKeyRef)
         }
     }
 }
@@ -226,5 +304,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Notification Names
 extension Notification.Name {
     static let toggleClipboardPopover = Notification.Name("toggleClipboardPopover")
+    static let togglePopoutBoard = Notification.Name("togglePopoutBoard")
+    static let openPopoutBoard = Notification.Name("openPopoutBoard")
 }
 

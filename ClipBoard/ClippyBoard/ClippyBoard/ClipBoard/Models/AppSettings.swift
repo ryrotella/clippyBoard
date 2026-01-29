@@ -30,6 +30,13 @@ class AppSettings: ObservableObject {
     @AppStorage("incognitoMode") var incognitoMode: Bool = false
     @AppStorage("autoClearDays") var autoClearDays: Int = 0 // 0 = never
 
+    // Popout window persistence
+    @AppStorage("popoutWindowX") var popoutWindowX: Double = 100
+    @AppStorage("popoutWindowY") var popoutWindowY: Double = 100
+    @AppStorage("popoutWindowWidth") var popoutWindowWidth: Double = 340
+    @AppStorage("popoutWindowHeight") var popoutWindowHeight: Double = 500
+    @AppStorage("popoutWindowFloating") var popoutWindowFloating: Bool = false
+
     var viewMode: ViewMode {
         get { ViewMode(rawValue: defaultViewMode) ?? .grid }
         set { defaultViewMode = newValue.rawValue }

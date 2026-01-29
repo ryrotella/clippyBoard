@@ -1,0 +1,71 @@
+# Documentation (user preference)
+docs/
+
+# Claude Code settings
+.claude/
+
+# Xcode
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcuserstate
+*.xcscmblueprint
+
+# Build artifacts
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# CocoaPods (if used)
+Pods/
+*.xcworkspace
+
+# Carthage (if used)
+Carthage/Build/
+Carthage/Checkouts/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE and editor files
+*.swp
+*.swo
+*~
+.idea/
+*.sublime-workspace
+.vscode/
+
+# Sensitive files (general patterns)
+*.pem
+*.p12
+*.key
+*.keystore
+.env
+.env.*
+secrets.*
+credentials.*
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Archives
+*.zip
+*.tar.gz
+*.rar

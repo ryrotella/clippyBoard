@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import Carbon
 
 struct SettingsView: View {
     @EnvironmentObject private var clipboardService: ClipboardService
@@ -16,6 +17,16 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
 
+            appearanceTab
+                .tabItem {
+                    Label("Appearance", systemImage: "paintbrush")
+                }
+
+            shortcutsTab
+                .tabItem {
+                    Label("Shortcuts", systemImage: "keyboard")
+                }
+
             privacyTab
                 .tabItem {
                     Label("Privacy", systemImage: "hand.raised")
@@ -26,7 +37,8 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 450, height: 300)
+        .frame(width: 500, height: 420)
+        .preferredColorScheme(settings.appearanceMode.colorScheme)
     }
 
     // MARK: - General Tab
@@ -46,30 +58,187 @@ struct SettingsView: View {
                     Text("1000 items").tag(1000)
                     Text("Unlimited").tag(Int.max)
                 }
-
-                Picker("Default View", selection: $settings.defaultViewMode) {
-                    ForEach(ViewMode.allCases, id: \.self) { mode in
-                        Label(mode.rawValue.capitalized, systemImage: mode.icon)
-                            .tag(mode.rawValue)
-                    }
-                }
             } header: {
                 Text("Behavior")
             }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
 
+    // MARK: - Appearance Tab
+
+    private var appearanceTab: some View {
+        Form {
             Section {
-                HStack {
-                    Text("Keyboard Shortcut")
-                    Spacer()
-                    Text(settings.globalShortcut)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(nsColor: .controlBackgroundColor))
-                        .cornerRadius(4)
+                Picker("Theme", selection: $settings.appearanceModeRaw) {
+                    ForEach(AppearanceMode.allCases, id: \.rawValue) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
                 }
             } header: {
-                Text("Shortcuts")
+                Text("Theme")
+            } footer: {
+                if settings.appearanceMode == .highContrast {
+                    Text("High Contrast mode increases visibility with stronger borders and colors.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Text Size")
+                        Spacer()
+                        Text("\(Int(settings.textSizeScale * 100))%")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $settings.textSizeScale, in: 0.8...1.5, step: 0.1)
+                }
+
+                Picker("Row Density", selection: $settings.rowDensityRaw) {
+                    ForEach(RowDensity.allCases, id: \.rawValue) { density in
+                        Text(density.displayName).tag(density.rawValue)
+                    }
+                }
+
+                Picker("Thumbnail Size", selection: $settings.thumbnailSizeRaw) {
+                    ForEach(ThumbnailSize.allCases, id: \.rawValue) { size in
+                        Text(size.displayName).tag(size.rawValue)
+                    }
+                }
+
+                Picker("Preview Lines", selection: $settings.maxPreviewLines) {
+                    Text("1 line").tag(1)
+                    Text("2 lines").tag(2)
+                    Text("3 lines").tag(3)
+                    Text("4 lines").tag(4)
+                }
+            } header: {
+                Text("Layout")
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Window Opacity")
+                        Spacer()
+                        Text("\(Int(settings.windowOpacity * 100))%")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $settings.windowOpacity, in: 0.5...1.0, step: 0.05)
+                }
+
+                HStack {
+                    Text("Accent Color")
+                    Spacer()
+                    if settings.accentColorHex.isEmpty {
+                        Text("System Default")
+                            .foregroundStyle(.secondary)
+                    }
+                    ColorPicker("", selection: Binding(
+                        get: { settings.accentColor ?? .accentColor },
+                        set: { settings.accentColor = $0 }
+                    ), supportsOpacity: false)
+                    .labelsHidden()
+
+                    if !settings.accentColorHex.isEmpty {
+                        Button(action: { settings.accentColorHex = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Reset to system default")
+                    }
+                }
+            } header: {
+                Text("Colors & Opacity")
+            }
+
+            Section {
+                Toggle("Show Row Separators", isOn: $settings.showRowSeparators)
+
+                if settings.showRowSeparators {
+                    HStack {
+                        Text("Separator Color")
+                        Spacer()
+                        if settings.separatorColorHex.isEmpty {
+                            Text("Default")
+                                .foregroundStyle(.secondary)
+                        }
+                        ColorPicker("", selection: Binding(
+                            get: { settings.separatorColor ?? Color(nsColor: .separatorColor) },
+                            set: { settings.separatorColor = $0 }
+                        ), supportsOpacity: true)
+                        .labelsHidden()
+
+                        if !settings.separatorColorHex.isEmpty {
+                            Button(action: { settings.separatorColorHex = "" }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Reset to default")
+                        }
+                    }
+                }
+            } header: {
+                Text("Row Separators")
+            }
+
+            Section {
+                Toggle("Show Source App Icon", isOn: $settings.showSourceAppIcon)
+                Toggle("Show Timestamps", isOn: $settings.showTimestamps)
+                Toggle("Show Type Badges", isOn: $settings.showTypeBadges)
+            } header: {
+                Text("Display Elements")
+            }
+
+            Section {
+                Button("Reset Appearance to Defaults") {
+                    settings.resetAppearanceToDefaults()
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
+    // MARK: - Shortcuts Tab
+
+    private var shortcutsTab: some View {
+        Form {
+            Section {
+                ShortcutRecorderRow(
+                    label: "Toggle Clipboard",
+                    shortcut: Binding(
+                        get: { settings.popoverShortcut },
+                        set: { settings.popoverShortcut = $0 }
+                    )
+                )
+
+                ShortcutRecorderRow(
+                    label: "Toggle Popout Window",
+                    shortcut: Binding(
+                        get: { settings.popoutShortcut },
+                        set: { settings.popoutShortcut = $0 }
+                    )
+                )
+            } header: {
+                Text("Global Keyboard Shortcuts")
+            } footer: {
+                Text("Click the field and press your desired key combination. These shortcuts work system-wide.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Button("Reset Shortcuts to Defaults") {
+                    settings.resetShortcutsToDefaults()
+                }
             }
         }
         .formStyle(.grouped)
@@ -153,9 +322,9 @@ struct SettingsView: View {
 
             Image(systemName: "clipboard")
                 .font(.system(size: 64))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(settings.accentColor ?? .accentColor)
 
-            Text("ClipBoard")
+            Text("ClippyBoard")
                 .font(.title)
                 .fontWeight(.semibold)
 
@@ -171,11 +340,9 @@ struct SettingsView: View {
 
             HStack(spacing: 20) {
                 Button("Website") {
-                    // TODO: Open website
-                }
-
-                Button("Support") {
-                    // TODO: Open support
+                    if let url = URL(string: "https://github.com/ryrotella/clippyBoard") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
             }
             .buttonStyle(.link)
@@ -191,4 +358,96 @@ struct SettingsView: View {
 #Preview {
     SettingsView()
         .environmentObject(ClipboardService())
+}
+
+// MARK: - Shortcut Recorder Row
+
+struct ShortcutRecorderRow: View {
+    let label: String
+    @Binding var shortcut: KeyboardShortcut
+
+    @State private var isRecording = false
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack {
+            Text(label)
+
+            Spacer()
+
+            Button(action: {
+                isRecording = true
+                isFocused = true
+            }) {
+                Text(isRecording ? "Press shortcut..." : shortcut.displayString)
+                    .foregroundStyle(isRecording ? .secondary : .primary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(isRecording ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .focusable()
+            .focused($isFocused)
+            .onKeyPress { keyPress in
+                guard isRecording else { return .ignored }
+
+                // Convert SwiftUI key to Carbon key code
+                if let keyCode = keyToKeyCode(keyPress.key),
+                   !keyPress.modifiers.isEmpty {
+                    let modifiers = modifiersToCarbon(keyPress.modifiers)
+                    shortcut = KeyboardShortcut(keyCode: keyCode, modifiers: modifiers)
+                    isRecording = false
+                    isFocused = false
+                    return .handled
+                }
+
+                return .ignored
+            }
+            .onChange(of: isFocused) { _, newValue in
+                if !newValue {
+                    isRecording = false
+                }
+            }
+
+            if isRecording {
+                Button(action: {
+                    isRecording = false
+                    isFocused = false
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func keyToKeyCode(_ key: KeyEquivalent) -> UInt32? {
+        let keyMap: [Character: UInt32] = [
+            "a": 0x00, "s": 0x01, "d": 0x02, "f": 0x03, "h": 0x04,
+            "g": 0x05, "z": 0x06, "x": 0x07, "c": 0x08, "v": 0x09,
+            "b": 0x0B, "q": 0x0C, "w": 0x0D, "e": 0x0E, "r": 0x0F,
+            "y": 0x10, "t": 0x11, "1": 0x12, "2": 0x13, "3": 0x14,
+            "4": 0x15, "6": 0x16, "5": 0x17, "=": 0x18, "9": 0x19,
+            "7": 0x1A, "-": 0x1B, "8": 0x1C, "0": 0x1D, "]": 0x1E,
+            "o": 0x1F, "u": 0x20, "[": 0x21, "i": 0x22, "p": 0x23,
+            "l": 0x25, "j": 0x26, "k": 0x28, "n": 0x2D, "m": 0x2E,
+            " ": 0x31
+        ]
+        return keyMap[key.character]
+    }
+
+    private func modifiersToCarbon(_ modifiers: SwiftUI.EventModifiers) -> UInt32 {
+        var result: UInt32 = 0
+        if modifiers.contains(.command) { result |= UInt32(cmdKey) }
+        if modifiers.contains(.shift) { result |= UInt32(shiftKey) }
+        if modifiers.contains(.option) { result |= UInt32(optionKey) }
+        if modifiers.contains(.control) { result |= UInt32(controlKey) }
+        return result
+    }
 }

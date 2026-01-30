@@ -10,9 +10,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var clipboardService: ClipboardService!
     private var screenshotService: ScreenshotService!
     private var modelContainer: ModelContainer!
+    private var popoutWindowController: PopoutBoardWindowController?
     private var hotKeyRef: EventHotKeyRef?
     private var popoutHotKeyRef: EventHotKeyRef?
-    private var popoutWindowController: PopoutBoardWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize model container
@@ -131,7 +131,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         InstallEventHandler(
             GetApplicationEventTarget(),
             { (_, event, _) -> OSStatus in
-                // Extract hotkey ID to determine which hotkey was pressed
                 var hotKeyID = EventHotKeyID()
                 GetEventParameter(
                     event,
@@ -160,33 +159,76 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             nil
         )
 
-        // Register ⌘⇧V for popover toggle (id: 1)
-        let popoverHotKeyID = EventHotKeyID(signature: OSType(0x434C4950), id: 1) // "CLIP"
-        let vKeyCode: UInt32 = 0x09 // V key
-        let modifiers: UInt32 = UInt32(cmdKey | shiftKey)
+        // Register the hotkeys from settings
+        registerHotkeys()
+
+        // Listen for shortcut changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(shortcutsDidChange),
+            name: .shortcutsDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func shortcutsDidChange() {
+        // Unregister existing hotkeys
+        if let ref = hotKeyRef {
+            UnregisterEventHotKey(ref)
+            hotKeyRef = nil
+        }
+        if let ref = popoutHotKeyRef {
+            UnregisterEventHotKey(ref)
+            popoutHotKeyRef = nil
+        }
+
+        // Register new hotkeys
+        registerHotkeys()
+    }
+
+    private func registerHotkeys() {
+        let settings = AppSettings.shared
+
+        // Register popover hotkey (id: 1)
+        let popoverShortcut = settings.popoverShortcut
+        let popoverHotKeyID = EventHotKeyID(signature: OSType(0x434C4950), id: 1)
 
         var popoverRef: EventHotKeyRef?
-        let popoverStatus = RegisterEventHotKey(vKeyCode, modifiers, popoverHotKeyID, GetApplicationEventTarget(), 0, &popoverRef)
+        let popoverStatus = RegisterEventHotKey(
+            popoverShortcut.keyCode,
+            popoverShortcut.modifiers,
+            popoverHotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &popoverRef
+        )
 
         if popoverStatus == noErr {
             self.hotKeyRef = popoverRef
-            print("Global hotkey ⌘⇧V registered successfully")
+            print("Global hotkey \(popoverShortcut.displayString) registered for popover")
         } else {
-            print("Failed to register global hotkey ⌘⇧V: \(popoverStatus)")
+            print("Failed to register popover hotkey: \(popoverStatus)")
         }
 
-        // Register ⌘⇧B for popout board toggle (id: 2)
-        let popoutHotKeyID = EventHotKeyID(signature: OSType(0x434C4950), id: 2) // "CLIP"
-        let bKeyCode: UInt32 = 0x0B // B key
+        // Register popout hotkey (id: 2)
+        let popoutShortcut = settings.popoutShortcut
+        let popoutHotKeyID = EventHotKeyID(signature: OSType(0x434C4950), id: 2)
 
         var popoutRef: EventHotKeyRef?
-        let popoutStatus = RegisterEventHotKey(bKeyCode, modifiers, popoutHotKeyID, GetApplicationEventTarget(), 0, &popoutRef)
+        let popoutStatus = RegisterEventHotKey(
+            popoutShortcut.keyCode,
+            popoutShortcut.modifiers,
+            popoutHotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &popoutRef
+        )
 
         if popoutStatus == noErr {
             self.popoutHotKeyRef = popoutRef
-            print("Global hotkey ⌘⇧B registered successfully")
+            print("Global hotkey \(popoutShortcut.displayString) registered for popout")
         } else {
-            print("Failed to register global hotkey ⌘⇧B: \(popoutStatus)")
+            print("Failed to register popout hotkey: \(popoutStatus)")
         }
     }
 
@@ -205,14 +247,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if clipboardService.didCapture {
             button.image = NSImage(systemSymbolName: "clipboard.fill", accessibilityDescription: "ClipBoard")
 
-            // Add a brief animation effect
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.15
-                button.animator().alphaValue = 0.5
-            } completionHandler: {
+            // Check if user prefers reduced motion
+            let shouldReduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            if !shouldReduceMotion {
+                // Add a brief animation effect
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.15
-                    button.animator().alphaValue = 1.0
+                    button.animator().alphaValue = 0.5
+                } completionHandler: {
+                    NSAnimationContext.runAnimationGroup { context in
+                        context.duration = 0.15
+                        button.animator().alphaValue = 1.0
+                    }
                 }
             }
         } else {
@@ -223,20 +269,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func triggerCaptureAnimation() {
         guard let button = statusItem.button else { return }
 
+        // Check if user prefers reduced motion
+        let shouldReduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+
         // Brief fill animation for screenshot capture
         button.image = NSImage(systemSymbolName: "clipboard.fill", accessibilityDescription: "ClipBoard")
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
-            button.animator().alphaValue = 0.5
-        } completionHandler: { [weak self] in
+        if shouldReduceMotion {
+            // Skip animation, just show filled icon briefly then reset
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.statusItem.button?.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "ClipBoard")
+            }
+        } else {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.15
-                self?.statusItem.button?.animator().alphaValue = 1.0
-            } completionHandler: {
-                // Reset to normal icon after animation
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    self?.statusItem.button?.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "ClipBoard")
+                button.animator().alphaValue = 0.5
+            } completionHandler: { [weak self] in
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.15
+                    self?.statusItem.button?.animator().alphaValue = 1.0
+                } completionHandler: {
+                    // Reset to normal icon after animation
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        self?.statusItem.button?.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "ClipBoard")
+                    }
                 }
             }
         }

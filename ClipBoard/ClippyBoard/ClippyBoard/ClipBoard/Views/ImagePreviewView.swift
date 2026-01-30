@@ -28,12 +28,14 @@ struct ImagePreviewView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Copy to clipboard")
+                .accessibilityLabel("Copy image")
 
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Close preview")
             }
             .padding()
 
@@ -68,15 +70,20 @@ struct ImagePreviewView: View {
                     Image(systemName: "minus.magnifyingglass")
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Zoom out")
+                .accessibilityHint("Current zoom: \(Int(scale * 100))%")
 
                 Text("\(Int(scale * 100))%")
                     .font(.caption)
                     .frame(width: 50)
+                    .accessibilityHidden(true)
 
                 Button(action: { scale = min(4.0, scale + 0.25) }) {
                     Image(systemName: "plus.magnifyingglass")
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Zoom in")
+                .accessibilityHint("Current zoom: \(Int(scale * 100))%")
 
                 Spacer()
 
@@ -85,12 +92,14 @@ struct ImagePreviewView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Reset zoom")
 
                 Button(action: saveImage) {
                     Image(systemName: "square.and.arrow.down")
                 }
                 .buttonStyle(.plain)
                 .help("Save image")
+                .accessibilityLabel("Save image")
             }
             .padding()
         }

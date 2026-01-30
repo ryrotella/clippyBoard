@@ -5,6 +5,7 @@ import SwiftData
 
 struct ClipboardContentView: View {
     @EnvironmentObject private var clipboardService: ClipboardService
+    @ObservedObject private var settings = AppSettings.shared
 
     @Binding var searchText: String
     @Binding var selectedType: ContentType?
@@ -84,9 +85,12 @@ struct ClipboardContentView: View {
         HStack {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
 
             TextField("Search clipboard...", text: $searchText)
                 .textFieldStyle(.plain)
+                .accessibilityLabel("Search")
+                .accessibilityHint("Type to filter clipboard items")
 
             if !searchText.isEmpty {
                 Button(action: { searchText = "" }) {
@@ -94,6 +98,7 @@ struct ClipboardContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
             }
         }
         .padding(8)
@@ -127,12 +132,12 @@ struct ClipboardContentView: View {
 
     private var itemsList: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: settings.showRowSeparators ? 0 : 4) {
                 // Pinned section
                 if !pinnedItems.isEmpty {
                     Section {
-                        ForEach(pinnedItems) { item in
-                            itemRow(for: item)
+                        ForEach(Array(pinnedItems.enumerated()), id: \.element.id) { index, item in
+                            itemRow(for: item, isLast: index == pinnedItems.count - 1 && unpinnedItems.isEmpty)
                         }
                     } header: {
                         sectionHeader("Pinned")
@@ -142,8 +147,8 @@ struct ClipboardContentView: View {
                 // Recent section
                 if !unpinnedItems.isEmpty {
                     Section {
-                        ForEach(unpinnedItems) { item in
-                            itemRow(for: item)
+                        ForEach(Array(unpinnedItems.enumerated()), id: \.element.id) { index, item in
+                            itemRow(for: item, isLast: index == unpinnedItems.count - 1)
                         }
                     } header: {
                         if !pinnedItems.isEmpty {
@@ -158,23 +163,32 @@ struct ClipboardContentView: View {
     }
 
     @ViewBuilder
-    private func itemRow(for item: ClipboardItem) -> some View {
-        ClipboardItemRow(item: item)
-            .onTapGesture(count: 2) {
-                // Double-tap: preview for images, copy for others
-                if item.contentTypeEnum == .image {
-                    previewingImage = item
-                } else {
+    private func itemRow(for item: ClipboardItem, isLast: Bool = false) -> some View {
+        VStack(spacing: 0) {
+            ClipboardItemRow(item: item)
+                .onTapGesture(count: 2) {
+                    // Double-tap: preview for images, copy for others
+                    if item.contentTypeEnum == .image {
+                        previewingImage = item
+                    } else {
+                        clipboardService.copyToClipboard(item)
+                    }
+                }
+                .onTapGesture(count: 1) {
+                    // Single tap: always copy
                     clipboardService.copyToClipboard(item)
                 }
+                .contextMenu {
+                    itemContextMenu(for: item)
+                }
+
+            // Row separator
+            if settings.showRowSeparators && !isLast {
+                settings.effectiveSeparatorColor
+                    .frame(height: 1)
+                    .padding(.vertical, 4)
             }
-            .onTapGesture(count: 1) {
-                // Single tap: always copy
-                clipboardService.copyToClipboard(item)
-            }
-            .contextMenu {
-                itemContextMenu(for: item)
-            }
+        }
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -274,6 +288,7 @@ struct ClipboardContentView: View {
             .buttonStyle(.plain)
             .font(.caption)
             .foregroundStyle(.secondary)
+            .accessibilityLabel("Clear history")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -284,6 +299,8 @@ struct ClipboardContentView: View {
 
 struct ClipboardPopover: View {
     @EnvironmentObject private var clipboardService: ClipboardService
+    @ObservedObject private var settings = AppSettings.shared
+    @Environment(\.openSettings) private var openSettings
 
     @State private var searchText = ""
     @State private var selectedType: ContentType?
@@ -304,6 +321,8 @@ struct ClipboardPopover: View {
             )
         }
         .frame(width: 340, height: 480)
+        .opacity(settings.windowOpacity)
+        .preferredColorScheme(settings.appearanceMode.colorScheme)
     }
 
     // MARK: - Header
@@ -328,13 +347,18 @@ struct ClipboardPopover: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("Open in popout window (⌘⇧B)")
+            .accessibilityLabel("Open popout window")
 
-            Button(action: {}) {
+            Button(action: {
+                openSettings()
+            }) {
                 Image(systemName: "gear")
                     .font(.body)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .help("Settings (⌘,)")
+            .accessibilityLabel("Settings")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -348,6 +372,10 @@ struct FilterChip: View {
     let isSelected: Bool
     let action: () -> Void
 
+    private var accentColor: Color {
+        AppSettings.shared.accentColor ?? .accentColor
+    }
+
     var body: some View {
         Button(action: action) {
             Text(title)
@@ -355,15 +383,17 @@ struct FilterChip: View {
                 .fontWeight(isSelected ? .medium : .regular)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .background(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                .background(isSelected ? accentColor.opacity(0.2) : Color.clear)
+                .foregroundStyle(isSelected ? accentColor : .secondary)
                 .cornerRadius(12)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(isSelected ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.3), lineWidth: 1)
+                        .stroke(isSelected ? accentColor.opacity(0.5) : Color.secondary.opacity(0.3), lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Filter by \(title)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

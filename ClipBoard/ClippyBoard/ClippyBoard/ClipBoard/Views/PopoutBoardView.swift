@@ -3,6 +3,8 @@ import SwiftData
 
 struct PopoutBoardView: View {
     @EnvironmentObject private var clipboardService: ClipboardService
+    @ObservedObject private var settings = AppSettings.shared
+    @Environment(\.openSettings) private var openSettings
 
     @State private var searchText = ""
     @State private var selectedType: ContentType?
@@ -24,6 +26,8 @@ struct PopoutBoardView: View {
             )
         }
         .frame(minWidth: 300, minHeight: 400)
+        .opacity(settings.windowOpacity)
+        .preferredColorScheme(settings.appearanceMode.colorScheme)
     }
 
     // MARK: - Header
@@ -50,15 +54,21 @@ struct PopoutBoardView: View {
                     .font(.body)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(isFloating ? Color.accentColor : Color.secondary)
+            .foregroundStyle(isFloating ? (settings.accentColor ?? .accentColor) : .secondary)
             .help(isFloating ? "Unpin from top (always on top)" : "Pin to top (always on top)")
+            .accessibilityLabel(isFloating ? "Window pinned" : "Pin window")
+            .accessibilityAddTraits(isFloating ? .isSelected : [])
 
-            Button(action: {}) {
+            Button(action: {
+                openSettings()
+            }) {
                 Image(systemName: "gear")
                     .font(.body)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .help("Settings (⌘,)")
+            .accessibilityLabel("Settings")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

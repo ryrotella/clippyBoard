@@ -57,3 +57,78 @@
   - updateStatusItemIcon(): Added check for NSWorkspace.shared.accessibilityDisplayShouldReduceMotion to skip alpha        
   animation                                                                                                                
   - triggerCaptureAnimation(): Added reduce motion check - shows filled icon briefly without animation when enabled      
+
+
+  ⏺ Session Summary - ClipBoardApp UI Polish & Customization                                                                 
+                                                                                                                           
+  What We Accomplished                                                                                                     
+                                                                                                                           
+  Phase 1: Settings Infrastructure                                                                                         
+  - Wired gear buttons to open Settings window in both popover and popout views                                            
+  - Wired Website button in About tab to GitHub                                                                            
+                                                                                                                           
+  Phase 2: Accessibility                                                                                                   
+  - Added accessibility labels throughout (search, filters, buttons, controls)                                             
+  - Added accessibilityHidden(true) for decorative elements                                                                
+  - Added reduce motion support for status bar animations                                                                  
+  - Created DesignTokens.swift with @ScaledMetric for Dynamic Type support                                                 
+                                                                                                                           
+  Phase 3: Extensive Appearance Customization                                                                              
+  - Theme modes: System, Light, Dark, High Contrast                                                                        
+  - Text size: 80% - 150% slider                                                                                           
+  - Row density: Compact, Comfortable, Spacious                                                                            
+  - Thumbnail size: Small, Medium, Large                                                                                   
+  - Preview lines: 1-4 lines configurable                                                                                  
+  - Window opacity: 50% - 100% slider                                                                                      
+  - Custom accent color: Color picker with reset                                                                           
+  - Row separators: Toggle + custom color picker                                                                           
+  - Display toggles: Source app icon, timestamps, type badges                                                              
+                                                                                                                           
+  Phase 4: Keyboard Shortcuts                                                                                              
+  - Built custom shortcut recorder (replaced incompatible KeyboardShortcuts package)                                       
+  - Shortcuts stored persistently and update in real-time                                                                  
+  - Reset to defaults functionality                                                                                        
+                                                                                                                           
+  ---                                                                                                                      
+  Files Modified/Created                                                                                                   
+  File: Utilities/DesignTokens.swift                                                                                       
+  Changes: NEW - Design token constants                                                                                    
+  ────────────────────────────────────────                                                                                 
+  File: Models/AppSettings.swift                                                                                           
+  Changes: Added 15+ new settings, enums (AppearanceMode, RowDensity, ThumbnailSize), KeyboardShortcut struct, Color hex   
+    extension                                                                                                              
+  ────────────────────────────────────────                                                                                 
+  File: Views/SettingsView.swift                                                                                           
+  Changes: Added Appearance & Shortcuts tabs, ShortcutRecorderRow component, removed non-functional grid/list picker       
+  ────────────────────────────────────────                                                                                 
+  File: Views/ClipboardPopover.swift                                                                                       
+  Changes: Added settings observer, row separators, color scheme, accessibility labels                                     
+  ────────────────────────────────────────                                                                                 
+  File: Views/PopoutBoardView.swift                                                                                        
+  Changes: Added settings observer, color scheme support                                                                   
+  ────────────────────────────────────────                                                                                 
+  File: Views/ClipboardItemRow.swift                                                                                       
+  Changes: Dynamic sizing, high contrast borders, respects all display settings                                            
+  ────────────────────────────────────────                                                                                 
+  File: Views/ImagePreviewView.swift                                                                                       
+  Changes: Added accessibility labels                                                                                      
+  ────────────────────────────────────────                                                                                 
+  File: AppDelegate.swift                                                                                                  
+  Changes: Configurable hotkeys with live updates, reduce motion support                                                   
+  ---                                                                                                                      
+  Issues Resolved                                                                                                          
+                                                                                                                           
+  1. @ScaledMetric environment errors → Moved property wrappers directly into View structs                                 
+  2. "Use SettingsLink" warning → Used @Environment(\.openSettings)                                                        
+  3. KeyboardShortcuts package incompatibility → Built custom recorder with Carbon key codes                               
+  4. EventModifiers ambiguity → Qualified as SwiftUI.EventModifiers                                                        
+                                                                                                                           
+  ---                                                                                                                      
+  Settings Tabs Summary                                                                                                    
+                                                                                                                           
+  - General: Launch at login, history limit                                                                                
+  - Appearance: Theme, text size, density, thumbnails, opacity, colors, separators, display toggles                        
+  - Shortcuts: Customizable global hotkeys for popover (⌘⇧V) and popout (⌘⇧B)                                              
+  - Privacy: Incognito mode, auto-clear, excluded apps                                                                     
+  - About: Version info, GitHub link                                                                                       
+                                         

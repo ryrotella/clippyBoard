@@ -7,6 +7,8 @@ struct ImagePreviewView: View {
     let onCopy: () -> Void
 
     @State private var scale: CGFloat = 1.0
+    @State private var saveError: String?
+    @State private var showingSaveError = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -104,21 +106,51 @@ struct ImagePreviewView: View {
             .padding()
         }
         .frame(width: 500, height: 400)
+        .alert("Save Failed", isPresented: $showingSaveError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveError ?? "An unknown error occurred while saving the image.")
+        }
     }
 
     private func saveImage() {
-        guard let nsImage = NSImage(data: imageData) else { return }
+        guard let nsImage = NSImage(data: imageData) else {
+            saveError = "Could not decode the image data."
+            showingSaveError = true
+            return
+        }
 
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.png]
         savePanel.nameFieldStringValue = "clipboard-image.png"
 
         if savePanel.runModal() == .OK, let url = savePanel.url {
-            if let tiffData = nsImage.tiffRepresentation,
-               let bitmap = NSBitmapImageRep(data: tiffData),
-               let pngData = bitmap.representation(using: .png, properties: [:]) {
-                try? pngData.write(to: url)
+            do {
+                guard let tiffData = nsImage.tiffRepresentation else {
+                    throw ImageSaveError.conversionFailed("Could not create TIFF representation.")
+                }
+                guard let bitmap = NSBitmapImageRep(data: tiffData) else {
+                    throw ImageSaveError.conversionFailed("Could not create bitmap representation.")
+                }
+                guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
+                    throw ImageSaveError.conversionFailed("Could not convert to PNG format.")
+                }
+                try pngData.write(to: url)
+            } catch {
+                saveError = error.localizedDescription
+                showingSaveError = true
             }
+        }
+    }
+}
+
+private enum ImageSaveError: LocalizedError {
+    case conversionFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .conversionFailed(let message):
+            return message
         }
     }
 }

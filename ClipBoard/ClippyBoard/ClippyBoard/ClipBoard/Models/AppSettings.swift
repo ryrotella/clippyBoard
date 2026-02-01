@@ -150,6 +150,7 @@ class AppSettings: ObservableObject {
     @AppStorage("excludedApps") var excludedAppsData: Data = Data()
     @AppStorage("incognitoMode") var incognitoMode: Bool = false
     @AppStorage("autoClearDays") var autoClearDays: Int = 0 // 0 = never
+    @AppStorage("sensitiveContentProtection") var sensitiveContentProtection: Bool = true // Require auth for passwords/tokens
 
     // MARK: - Keyboard Shortcuts (stored as JSON)
     @AppStorage("popoverShortcutData") var popoverShortcutData: Data = Data()
@@ -330,12 +331,30 @@ class AppSettings: ObservableObject {
     }
 
     private let defaultExcludedApps = [
+        // 1Password
         "com.agilebits.onepassword7",
         "com.agilebits.onepassword-osx",
         "com.1password.1password",
+        // LastPass
         "com.lastpass.LastPass",
+        // Bitwarden
         "com.bitwarden.desktop",
-        "com.dashlane.dashlanephonefinal"
+        "com.bitwarden.desktop.safari",
+        // Dashlane
+        "com.dashlane.dashlanephonefinal",
+        // KeePassXC
+        "org.keepassxc.keepassxc",
+        // Enpass
+        "io.enpass.mac",
+        // RoboForm
+        "com.siber.roboform",
+        // Keeper
+        "com.callpod.keepersecuritymac",
+        // NordPass
+        "com.nordpass.macos.NordPass",
+        // Apple Passwords & Keychain
+        "com.apple.Passwords",
+        "com.apple.keychainaccess"
     ]
 
     func isAppExcluded(_ bundleId: String?) -> Bool {
@@ -377,7 +396,10 @@ extension Color {
     }
 
     func toHex() -> String? {
-        guard let components = NSColor(self).cgColor.components, components.count >= 3 else {
+        // Convert to RGB color space to handle grayscale colors
+        guard let rgbColor = NSColor(self).usingColorSpace(.deviceRGB),
+              let components = rgbColor.cgColor.components,
+              components.count >= 3 else {
             return nil
         }
 

@@ -6,10 +6,17 @@ import SwiftData
 struct ClipboardContentView: View {
     @EnvironmentObject private var clipboardService: ClipboardService
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var authService = AuthenticationService.shared
 
     @Binding var searchText: String
     @Binding var selectedType: ContentType?
     @Binding var previewingImage: ClipboardItem?
+
+    /// Debounced search text that updates after a delay
+    @State private var debouncedSearchText = ""
+
+    /// Set of item IDs that have been revealed (authenticated) this session
+    @State private var revealedItems: Set<UUID> = []
 
     private var items: [ClipboardItem] {
         clipboardService.items
@@ -18,10 +25,10 @@ struct ClipboardContentView: View {
     private var filteredItems: [ClipboardItem] {
         var result = items
 
-        // Filter by search text
-        if !searchText.isEmpty {
+        // Filter by debounced search text
+        if !debouncedSearchText.isEmpty {
             result = result.filter { item in
-                item.searchableText.contains(searchText.lowercased())
+                item.searchableText.contains(debouncedSearchText.lowercased())
             }
         }
 
@@ -76,6 +83,21 @@ struct ClipboardContentView: View {
                     previewingImage = nil
                 }
             )
+        }
+        .task(id: searchText) {
+            // Debounce search by waiting 300ms before applying
+            do {
+                try await Task.sleep(nanoseconds: 300_000_000)
+                debouncedSearchText = searchText
+            } catch {
+                // Task was cancelled (new search text entered), which is expected
+            }
+        }
+        .onChange(of: searchText) { _, newValue in
+            // If search is cleared, update immediately without debounce
+            if newValue.isEmpty {
+                debouncedSearchText = ""
+            }
         }
     }
 
@@ -164,19 +186,25 @@ struct ClipboardContentView: View {
 
     @ViewBuilder
     private func itemRow(for item: ClipboardItem, isLast: Bool = false) -> some View {
+        let isRevealed = !item.isSensitive || revealedItems.contains(item.id)
+
         VStack(spacing: 0) {
-            ClipboardItemRow(item: item)
+            ClipboardItemRow(item: item, isRevealed: isRevealed)
                 .onTapGesture(count: 2) {
                     // Double-tap: preview for images, copy for others
                     if item.contentTypeEnum == .image {
                         previewingImage = item
                     } else {
-                        clipboardService.copyToClipboard(item)
+                        handleCopy(item)
                     }
                 }
                 .onTapGesture(count: 1) {
-                    // Single tap: always copy
-                    clipboardService.copyToClipboard(item)
+                    // Single tap: reveal if sensitive, otherwise copy
+                    if item.isSensitive && !isRevealed {
+                        handleReveal(item)
+                    } else {
+                        handleCopy(item)
+                    }
                 }
                 .contextMenu {
                     itemContextMenu(for: item)
@@ -187,6 +215,29 @@ struct ClipboardContentView: View {
                 settings.effectiveSeparatorColor
                     .frame(height: 1)
                     .padding(.vertical, 4)
+            }
+        }
+    }
+
+    /// Handle revealing sensitive content with authentication
+    private func handleReveal(_ item: ClipboardItem) {
+        Task {
+            let authenticated = await authService.authenticate(
+                for: item.id,
+                reason: "Authenticate to reveal sensitive content"
+            )
+            if authenticated {
+                revealedItems.insert(item.id)
+            }
+        }
+    }
+
+    /// Handle copying with authentication for sensitive items
+    private func handleCopy(_ item: ClipboardItem) {
+        Task {
+            let success = await clipboardService.copyToClipboardWithAuth(item)
+            if success && item.isSensitive {
+                revealedItems.insert(item.id)
             }
         }
     }
@@ -205,8 +256,16 @@ struct ClipboardContentView: View {
 
     @ViewBuilder
     private func itemContextMenu(for item: ClipboardItem) -> some View {
-        Button(action: { clipboardService.copyToClipboard(item) }) {
-            Label("Copy", systemImage: "doc.on.doc")
+        // Copy action (with auth for sensitive items)
+        Button(action: { handleCopy(item) }) {
+            Label(item.isSensitive ? "Copy (Requires Auth)" : "Copy", systemImage: "doc.on.doc")
+        }
+
+        // Reveal action for sensitive items
+        if item.isSensitive && !revealedItems.contains(item.id) {
+            Button(action: { handleReveal(item) }) {
+                Label("Reveal Content", systemImage: "lock.open")
+            }
         }
 
         if item.contentTypeEnum == .image {
@@ -215,8 +274,9 @@ struct ClipboardContentView: View {
             }
         }
 
-        // Transform submenu for text-based content
-        if item.contentTypeEnum == .text || item.contentTypeEnum == .url {
+        // Transform submenu for text-based content (only if revealed or not sensitive)
+        if (item.contentTypeEnum == .text || item.contentTypeEnum == .url) &&
+           (!item.isSensitive || revealedItems.contains(item.id)) {
             Menu {
                 ForEach(TextTransformation.allCases, id: \.self) { transform in
                     Button(action: {

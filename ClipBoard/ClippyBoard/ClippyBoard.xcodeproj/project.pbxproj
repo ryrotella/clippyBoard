@@ -95,7 +95,6 @@
 			mainGroup = 178D4F242F2B0FE300A6ADBE;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				178D4F562F2B17C100A6ADBE /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
 				178D4F5B2F2B1C6A00A6ADBE /* XCRemoteSwiftPackageReference "HotKey" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -329,14 +328,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		178D4F562F2B17C100A6ADBE /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/sindresorhus/KeyboardShortcuts";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.4.0;
-			};
-		};
 		178D4F5B2F2B1C6A00A6ADBE /* XCRemoteSwiftPackageReference "HotKey" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/soffes/HotKey";

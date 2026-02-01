@@ -9,7 +9,7 @@ struct PopoutBoardView: View {
     @State private var searchText = ""
     @State private var selectedType: ContentType?
     @State private var previewingImage: ClipboardItem?
-    @State private var isFloating = AppSettings.shared.popoutWindowFloating
+    @State private var isFloating = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +28,12 @@ struct PopoutBoardView: View {
         .frame(minWidth: 300, minHeight: 400)
         .opacity(settings.windowOpacity)
         .preferredColorScheme(settings.appearanceMode.colorScheme)
+        .onAppear {
+            isFloating = AppSettings.shared.popoutWindowFloating
+        }
+        .onChange(of: settings.popoutWindowFloating) { _, newValue in
+            isFloating = newValue
+        }
     }
 
     // MARK: - Header

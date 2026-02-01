@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftData
 import Carbon
+import os
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -80,10 +81,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            AppLogger.database.error("Failed to create ModelContainer: \(error.localizedDescription, privacy: .public)")
+
+            // Attempt recovery by deleting corrupted database
+            if attemptDatabaseRecovery(schema: schema, configuration: modelConfiguration) {
+                AppLogger.database.info("Database recovery successful")
+            } else {
+                // Show alert to user and quit
+                showDatabaseErrorAlert(error: error)
+                return
+            }
         }
 
         // Ensure default pinboard exists
+        guard modelContainer != nil else { return }
         let context = modelContainer.mainContext
         let descriptor = FetchDescriptor<Pinboard>(
             predicate: #Predicate { $0.isDefault == true }
@@ -97,8 +108,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 try context.save()
             }
         } catch {
-            print("Failed to ensure default pinboard: \(error)")
+            AppLogger.database.error("Failed to ensure default pinboard: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func attemptDatabaseRecovery(schema: Schema, configuration: ModelConfiguration) -> Bool {
+        // Get the default SwiftData store URL
+        guard let applicationSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return false
+        }
+
+        let storeURL = applicationSupportURL.appendingPathComponent("default.store")
+
+        // Delete the corrupted database files
+        let fileManager = FileManager.default
+        let filesToDelete = [
+            storeURL,
+            storeURL.appendingPathExtension("shm"),
+            storeURL.appendingPathExtension("wal")
+        ]
+
+        for file in filesToDelete {
+            try? fileManager.removeItem(at: file)
+        }
+
+        AppLogger.database.info("Deleted corrupted database files, attempting to recreate")
+
+        // Try to create the container again
+        do {
+            modelContainer = try ModelContainer(for: schema, configurations: [configuration])
+            return true
+        } catch {
+            AppLogger.database.error("Failed to recreate ModelContainer after recovery: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    private func showDatabaseErrorAlert(error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Database Error"
+        alert.informativeText = "ClipBoard could not initialize its database. Your clipboard history may have been corrupted.\n\nError: \(error.localizedDescription)\n\nThe app will now quit. Please try restarting the app."
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Quit")
+        alert.runModal()
+        NSApp.terminate(nil)
     }
 
     private func setupStatusItem() {
@@ -205,9 +258,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if popoverStatus == noErr {
             self.hotKeyRef = popoverRef
-            print("Global hotkey \(popoverShortcut.displayString) registered for popover")
+            AppLogger.hotkeys.info("Global hotkey \(popoverShortcut.displayString, privacy: .public) registered for popover")
         } else {
-            print("Failed to register popover hotkey: \(popoverStatus)")
+            AppLogger.hotkeys.error("Failed to register popover hotkey: \(popoverStatus)")
         }
 
         // Register popout hotkey (id: 2)
@@ -226,9 +279,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if popoutStatus == noErr {
             self.popoutHotKeyRef = popoutRef
-            print("Global hotkey \(popoutShortcut.displayString) registered for popout")
+            AppLogger.hotkeys.info("Global hotkey \(popoutShortcut.displayString, privacy: .public) registered for popout")
         } else {
-            print("Failed to register popout hotkey: \(popoutStatus)")
+            AppLogger.hotkeys.error("Failed to register popout hotkey: \(popoutStatus)")
         }
     }
 

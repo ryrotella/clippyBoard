@@ -259,6 +259,15 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Sensitive Content Protection", isOn: $settings.sensitiveContentProtection)
+                Text("Automatically detect passwords, API keys, and tokens. Require Touch ID or password to view or copy.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Security")
+            }
+
+            Section {
                 Picker("Auto-Clear History", selection: $settings.autoClearDays) {
                     Text("Never").tag(0)
                     Text("After 1 day").tag(1)
@@ -428,6 +437,9 @@ struct ShortcutRecorderRow: View {
     }
 
     private func keyToKeyCode(_ key: KeyEquivalent) -> UInt32? {
+        // Convert to lowercase to handle Shift+Letter combinations
+        let char = Character(key.character.lowercased())
+
         let keyMap: [Character: UInt32] = [
             "a": 0x00, "s": 0x01, "d": 0x02, "f": 0x03, "h": 0x04,
             "g": 0x05, "z": 0x06, "x": 0x07, "c": 0x08, "v": 0x09,
@@ -439,7 +451,7 @@ struct ShortcutRecorderRow: View {
             "l": 0x25, "j": 0x26, "k": 0x28, "n": 0x2D, "m": 0x2E,
             " ": 0x31
         ]
-        return keyMap[key.character]
+        return keyMap[char]
     }
 
     private func modifiersToCarbon(_ modifiers: SwiftUI.EventModifiers) -> UInt32 {

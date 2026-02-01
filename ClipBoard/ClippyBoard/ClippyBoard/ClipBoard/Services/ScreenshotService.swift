@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import SwiftData
 import Vision
+import os
 
 @MainActor
 class ScreenshotService: ObservableObject {
@@ -48,10 +49,10 @@ class ScreenshotService: ObservableObject {
 
         let started = query.start()
         isMonitoring = started
-        print("ScreenshotService: Started monitoring for screenshots: \(started)")
+        AppLogger.screenshot.info("Started monitoring for screenshots: \(started)")
 
         if !started {
-            print("ScreenshotService: Failed to start query - check Full Disk Access permissions")
+            AppLogger.screenshot.error("Failed to start query - check Full Disk Access permissions")
         }
     }
 
@@ -77,7 +78,7 @@ class ScreenshotService: ObservableObject {
             }
         }
 
-        print("ScreenshotService: Initial gather complete, found \(processedScreenshots.count) existing screenshots")
+        AppLogger.screenshot.info("Initial gather complete, found \(self.processedScreenshots.count) existing screenshots")
         query?.enableUpdates()
     }
 
@@ -109,11 +110,11 @@ class ScreenshotService: ObservableObject {
 
         // Only process screenshots from the last 30 seconds (avoid old ones on restart)
         guard Date().timeIntervalSince(creationDate) < 30 else {
-            print("ScreenshotService: Skipping old screenshot: \(path)")
+            AppLogger.screenshot.debug("Skipping old screenshot")
             return
         }
 
-        print("ScreenshotService: New screenshot detected: \(path)")
+        AppLogger.screenshot.info("New screenshot detected")
 
         // Wait a moment for macOS to finish writing the file
         Task {
@@ -127,9 +128,7 @@ class ScreenshotService: ObservableObject {
         let url = URL(fileURLWithPath: path)
 
         // Debug: Check file accessibility
-        print("ScreenshotService: Checking file at \(path)")
-        print("ScreenshotService: File exists: \(fileManager.fileExists(atPath: path))")
-        print("ScreenshotService: Is readable: \(fileManager.isReadableFile(atPath: path))")
+        AppLogger.screenshot.debug("Checking file accessibility")
 
         // Try reading file data directly
         var imageData: Data?
@@ -138,13 +137,13 @@ class ScreenshotService: ObservableObject {
                 imageData = try Data(contentsOf: url)
                 if imageData != nil { break }
             } catch {
-                print("ScreenshotService: Retry \(attempt) - Error: \(error.localizedDescription)")
+                AppLogger.screenshot.warning("Retry \(attempt) - Error: \(error.localizedDescription, privacy: .public)")
             }
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
         }
 
         guard let data = imageData, let image = NSImage(data: data) else {
-            print("ScreenshotService: Failed to load screenshot image after retries")
+            AppLogger.screenshot.error("Failed to load screenshot image after retries")
             return
         }
 
@@ -152,11 +151,11 @@ class ScreenshotService: ObservableObject {
         guard let tiffData = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiffData),
               let pngData = bitmap.representation(using: .png, properties: [:]) else {
-            print("ScreenshotService: Failed to convert image to PNG")
+            AppLogger.screenshot.error("Failed to convert image to PNG")
             return
         }
 
-        print("ScreenshotService: Successfully loaded image (\(pngData.count) bytes), running OCR...")
+        AppLogger.screenshot.debug("Successfully loaded image (\(pngData.count) bytes), running OCR...")
 
         // Run OCR
         let extractedText = await performOCR(on: image)
@@ -195,7 +194,7 @@ class ScreenshotService: ObservableObject {
             do {
                 try handler.perform([request])
             } catch {
-                print("ScreenshotService: OCR failed: \(error)")
+                AppLogger.screenshot.error("OCR failed: \(error.localizedDescription, privacy: .public)")
                 continuation.resume(returning: "")
             }
         }
@@ -204,7 +203,7 @@ class ScreenshotService: ObservableObject {
     @MainActor
     private func saveScreenshot(imageData: Data, extractedText: String, sourcePath: String, timestamp: Date) async {
         guard let modelContainer = modelContainer else {
-            print("ScreenshotService: No model container")
+            AppLogger.screenshot.warning("No model container")
             return
         }
 
@@ -230,11 +229,11 @@ class ScreenshotService: ObservableObject {
 
         do {
             try context.save()
-            print("ScreenshotService: Saved screenshot with \(extractedText.count) chars of OCR text")
+            AppLogger.screenshot.info("Saved screenshot with \(extractedText.count) chars of OCR text")
             lastScreenshotDate = timestamp
             onScreenshotCaptured?()
         } catch {
-            print("ScreenshotService: Failed to save screenshot: \(error)")
+            AppLogger.screenshot.error("Failed to save screenshot: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

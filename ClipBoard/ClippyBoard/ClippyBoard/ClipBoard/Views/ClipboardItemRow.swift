@@ -3,8 +3,10 @@ import SwiftData
 
 struct ClipboardItemRow: View {
     let item: ClipboardItem
+    var isRevealed: Bool = true // For sensitive items: whether content is revealed
 
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var authService = AuthenticationService.shared
 
     // Dynamic Type scaled sizes (combined with user's text size preference)
     @ScaledMetric(relativeTo: .caption2) private var baseBadgeFont: CGFloat = DesignTokens.badgeFont
@@ -21,8 +23,19 @@ struct ClipboardItemRow: View {
         item.contentTypeEnum == .image
     }
 
+    private var isImageFile: Bool {
+        item.contentTypeEnum == .file && item.thumbnailData != nil
+    }
+
+    /// Cached image for this item (decoded once, used multiple times)
+    private var cachedImage: NSImage? {
+        guard isImage else { return nil }
+        return ImageCache.shared.image(for: item.content, key: item.id.uuidString)
+    }
+
     private var thumbnailSize: CGFloat {
-        isImage ? settings.thumbnailSizeSetting.largeSize : settings.thumbnailSizeSetting.smallSize
+        // Show larger thumbnail for images and image files
+        (isImage || isImageFile) ? settings.thumbnailSizeSetting.largeSize : settings.thumbnailSizeSetting.smallSize
     }
 
     private var rowPadding: CGFloat {
@@ -31,6 +44,11 @@ struct ClipboardItemRow: View {
 
     private var contentSpacing: CGFloat {
         settings.rowDensity.spacing
+    }
+
+    /// Whether the content should be hidden (sensitive and not authenticated)
+    private var shouldHideContent: Bool {
+        item.isSensitive && !isRevealed
     }
 
     var body: some View {
@@ -54,7 +72,7 @@ struct ClipboardItemRow: View {
                     }
 
                     // Image dimensions
-                    if isImage, let nsImage = NSImage(data: item.content) {
+                    if isImage, let nsImage = cachedImage {
                         Text("\(Int(nsImage.size.width))×\(Int(nsImage.size.height))")
                             .font(.system(size: badgeFont))
                             .foregroundStyle(.secondary)
@@ -65,6 +83,13 @@ struct ClipboardItemRow: View {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 8))
                             .foregroundStyle(settings.accentColor ?? .orange)
+                    }
+
+                    // Sensitive indicator
+                    if item.isSensitive {
+                        Image(systemName: shouldHideContent ? "lock.fill" : "lock.open.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(shouldHideContent ? .red : .green)
                     }
 
                     Spacer()
@@ -79,11 +104,24 @@ struct ClipboardItemRow: View {
 
                 // Content preview (hide for images)
                 if !isImage {
-                    Text(item.displayText.isEmpty ? "(No text)" : item.displayText)
-                        .font(.system(size: bodyFont))
-                        .foregroundStyle(.primary)
-                        .lineLimit(settings.maxPreviewLines)
-                        .truncationMode(.tail)
+                    if shouldHideContent {
+                        // Show placeholder for sensitive hidden content
+                        HStack(spacing: 4) {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: bodyFont * 0.9))
+                            Text("Sensitive content - tap to reveal")
+                                .font(.system(size: bodyFont * 0.9))
+                                .italic()
+                        }
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    } else {
+                        Text(item.displayText.isEmpty ? "(No text)" : item.displayText)
+                            .font(.system(size: bodyFont))
+                            .foregroundStyle(.primary)
+                            .lineLimit(settings.maxPreviewLines)
+                            .truncationMode(.tail)
+                    }
                 }
 
                 // Source app
@@ -142,7 +180,7 @@ struct ClipboardItemRow: View {
                 .accessibilityHidden(true)
 
         case .image:
-            if let nsImage = NSImage(data: item.content) {
+            if let nsImage = cachedImage {
                 Image(nsImage: nsImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -172,14 +210,36 @@ struct ClipboardItemRow: View {
                 .accessibilityHidden(true)
 
         case .file:
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.orange.opacity(0.1))
-                .overlay(
-                    Image(systemName: "doc")
-                        .font(.system(size: iconSize))
-                        .foregroundStyle(.orange)
-                )
-                .accessibilityHidden(true)
+            // Show thumbnail for image files, otherwise show file icon
+            if let thumbnail = item.thumbnailImage {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: thumbnailSize, height: thumbnailSize)
+                    .cornerRadius(6)
+                    .clipped()
+                    .overlay(
+                        // Small file badge in corner to indicate it's a file
+                        Image(systemName: "doc.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white)
+                            .padding(3)
+                            .background(Color.orange)
+                            .cornerRadius(4)
+                            .padding(4),
+                        alignment: .bottomTrailing
+                    )
+                    .accessibilityHidden(true)
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.orange.opacity(0.1))
+                    .overlay(
+                        Image(systemName: "doc")
+                            .font(.system(size: iconSize))
+                            .foregroundStyle(.orange)
+                    )
+                    .accessibilityHidden(true)
+            }
         }
     }
 

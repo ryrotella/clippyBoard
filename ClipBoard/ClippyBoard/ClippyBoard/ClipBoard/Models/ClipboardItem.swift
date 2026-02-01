@@ -15,6 +15,8 @@ final class ClipboardItem {
     var pinboardId: UUID? // Which tab/pinboard
     var characterCount: Int?
     var searchableText: String
+    var isSensitive: Bool // Detected as password, token, or API key
+    var thumbnailData: Data? // Thumbnail for image files
 
     init(
         id: UUID = UUID(),
@@ -27,7 +29,9 @@ final class ClipboardItem {
         isPinned: Bool = false,
         pinboardId: UUID? = nil,
         characterCount: Int? = nil,
-        searchableText: String = ""
+        searchableText: String = "",
+        isSensitive: Bool = false,
+        thumbnailData: Data? = nil
     ) {
         self.id = id
         self.content = content
@@ -40,6 +44,8 @@ final class ClipboardItem {
         self.pinboardId = pinboardId
         self.characterCount = characterCount
         self.searchableText = searchableText
+        self.isSensitive = isSensitive
+        self.thumbnailData = thumbnailData
     }
 
     var contentTypeEnum: ContentType {
@@ -65,6 +71,18 @@ final class ClipboardItem {
             return nil
         }
         return NSWorkspace.shared.icon(forFile: appURL.path)
+    }
+
+    /// Returns the thumbnail image if available (for image files)
+    var thumbnailImage: NSImage? {
+        guard let data = thumbnailData else { return nil }
+        return NSImage(data: data)
+    }
+
+    /// Returns the first file path (for file type items)
+    var firstFilePath: String? {
+        guard contentTypeEnum == .file else { return nil }
+        return String(data: content, encoding: .utf8)?.components(separatedBy: "\n").first
     }
 }
 

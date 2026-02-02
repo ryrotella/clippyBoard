@@ -178,6 +178,8 @@ class AppSettings: ObservableObject {
     @AppStorage("incognitoMode") var incognitoMode: Bool = false
     @AppStorage("autoClearDays") var autoClearDays: Int = 0 // 0 = never
     @AppStorage("sensitiveContentProtection") var sensitiveContentProtection: Bool = true // Require auth for passwords/tokens
+    @AppStorage("privateBrowsingDetection") var privateBrowsingDetection: Bool = true // Auto-detect incognito/private windows
+    @AppStorage("privateBrowsingAction") var privateBrowsingAction: String = "skip" // "skip" or "sensitive"
 
     // MARK: - Keyboard Shortcuts (stored as JSON)
     @AppStorage("popoverShortcutData") var popoverShortcutData: Data = Data()
@@ -284,6 +286,9 @@ class AppSettings: ObservableObject {
 
     /// Sliding panel height (for top/bottom edges)
     @AppStorage("slidingPanelHeight") var slidingPanelHeight: Double = 520
+
+    /// Keep panel on top of other windows
+    @AppStorage("panelAlwaysOnTop") var panelAlwaysOnTop: Bool = true
 
     // MARK: - Quick Access Shortcuts
 

@@ -1,6 +1,24 @@
-# ClipBoard Local API Documentation
+# ClippyBoard Local API Documentation
 
-ClipBoard provides a local HTTP API for integration with agents, automation tools, and other applications. The API is disabled by default and runs only on localhost for security.
+ClippyBoard provides a local HTTP API for integration with AI agents, automation tools, and other applications. The API runs only on localhost for security.
+
+**Version:** 1.1
+**Base URL:** `http://localhost:19847`
+
+---
+
+## Table of Contents
+
+1. [Configuration](#configuration)
+2. [Authentication](#authentication)
+3. [Endpoints Overview](#endpoints-overview)
+4. [Read Endpoints](#read-endpoints)
+5. [Write Endpoints](#write-endpoints)
+6. [Paste Endpoints](#paste-endpoints)
+7. [Error Responses](#error-responses)
+8. [Examples](#examples)
+9. [Security Notes](#security-notes)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -8,7 +26,7 @@ ClipBoard provides a local HTTP API for integration with agents, automation tool
 
 ### Enable the API
 
-1. Open ClipBoard Settings (right-click menu bar icon → Settings)
+1. Open ClippyBoard Settings (Option+click or right-click menu bar icon → Settings)
 2. Go to the **Advanced** tab
 3. Toggle **Enable Local API** on
 4. Optionally change the port (default: 19847)
@@ -46,15 +64,26 @@ Click **Regenerate Token** in Settings → Advanced to create a new token. The o
 
 ---
 
-## Base URL
+## Endpoints Overview
 
-```
-http://localhost:19847
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/health` | Health check |
+| `GET` | `/api/items` | List clipboard items |
+| `GET` | `/api/items/:id` | Get single item details |
+| `GET` | `/api/search?q=query` | Search items |
+| `GET` | `/api/screenshots` | List screenshots |
+| `GET` | `/api/screenshots/:id/image` | Get screenshot as PNG |
+| `POST` | `/api/items` | Create new item |
+| `POST` | `/api/items/:id/copy` | Copy item to system clipboard |
+| `POST` | `/api/items/:id/paste` | Copy item and simulate Cmd+V |
+| `POST` | `/api/paste` | Simulate Cmd+V (current clipboard) |
+| `PUT` | `/api/items/:id/pin` | Toggle pin status |
+| `DELETE` | `/api/items/:id` | Delete item |
 
 ---
 
-## Endpoints
+## Read Endpoints
 
 ### Health Check
 
@@ -68,7 +97,7 @@ GET /api/health
 ```json
 {
   "status": "ok",
-  "version": "1.0"
+  "version": "1.1"
 }
 ```
 
@@ -94,34 +123,18 @@ GET /api/items
       "sourceApp": "Safari",
       "isPinned": false,
       "characterCount": 13
-    },
-    {
-      "id": "550e8400-e29b-41d4-a716-446655440001",
-      "type": "url",
-      "text": "https://example.com",
-      "timestamp": "2026-02-02T10:25:00Z",
-      "sourceApp": "Chrome",
-      "isPinned": true,
-      "characterCount": 19
-    },
-    {
-      "id": "550e8400-e29b-41d4-a716-446655440002",
-      "type": "image",
-      "text": "",
-      "timestamp": "2026-02-02T10:20:00Z",
-      "sourceApp": "Preview",
-      "isPinned": false,
-      "characterCount": 0
     }
   ]
 }
 ```
 
 **Item Types:**
-- `text` - Plain text content
-- `url` - URL/link
-- `image` - Image data (screenshot or copied image)
-- `file` - File reference
+| Type | Description |
+|------|-------------|
+| `text` | Plain text content |
+| `url` | URL/link |
+| `image` | Image data (screenshot or copied image) |
+| `file` | File reference |
 
 ---
 
@@ -141,7 +154,7 @@ GET /api/items/:id
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "type": "text",
-  "content": "The full text content of the clipboard item...",
+  "content": "The full text content...",
   "timestamp": "2026-02-02T10:30:00Z",
   "sourceApp": "Safari",
   "isPinned": false
@@ -159,7 +172,38 @@ GET /api/items/:id
 }
 ```
 
-> Note: For images, use the `/api/screenshots/:id/image` endpoint to get the actual image data.
+> **Note:** For images, use `/api/screenshots/:id/image` to get the actual image data.
+
+---
+
+### Search Items
+
+Search clipboard history by text content.
+
+```
+GET /api/search?q=query
+```
+
+**Parameters:**
+- `q` - Search query (URL-encoded)
+
+**Response:**
+```json
+{
+  "query": "hello",
+  "count": 3,
+  "items": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "type": "text",
+      "text": "Hello, World!",
+      "timestamp": "2026-02-02T10:30:00Z",
+      "sourceApp": "Safari",
+      "isPinned": false
+    }
+  ]
+}
+```
 
 ---
 
@@ -178,11 +222,6 @@ GET /api/screenshots
     {
       "id": "550e8400-e29b-41d4-a716-446655440002",
       "timestamp": "2026-02-02T10:20:00Z",
-      "sourceApp": "Screenshot"
-    },
-    {
-      "id": "550e8400-e29b-41d4-a716-446655440003",
-      "timestamp": "2026-02-02T10:15:00Z",
       "sourceApp": "Screenshot"
     }
   ]
@@ -203,64 +242,179 @@ GET /api/screenshots/:id/image
 - `id` - UUID of the screenshot item
 
 **Response:**
-- Content-Type: `image/png`
-- Body: Raw PNG image data
+- **Content-Type:** `image/png`
+- **Body:** Raw PNG image data
 
-**Example with curl:**
-```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://localhost:19847/api/screenshots/550e8400-e29b-41d4-a716-446655440002/image \
-  -o screenshot.png
+---
+
+## Write Endpoints
+
+### Create Item
+
+Add a new item to clipboard history.
+
 ```
+POST /api/items
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "content": "Text content to save",
+  "type": "text",
+  "sourceAppName": "My AI Agent",
+  "isPinned": false,
+  "isSensitive": false
+}
+```
+
+**Fields:**
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `content` | Yes | - | The text content to save |
+| `type` | No | `"text"` | Content type: `"text"` or `"url"` |
+| `sourceApp` | No | - | Bundle identifier |
+| `sourceAppName` | No | `"API"` | Display name shown in UI |
+| `isPinned` | No | `false` | Pin the item |
+| `isSensitive` | No | `false` | Mark as sensitive (requires auth to view) |
+
+**Response (201 Created):**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "type": "text",
+  "timestamp": "2026-02-02T10:30:00Z",
+  "message": "Item created successfully"
+}
+```
+
+---
+
+### Copy Item to Clipboard
+
+Copy an existing item to the system clipboard (without pasting).
+
+```
+POST /api/items/:id/copy
+```
+
+**Response:**
+```json
+{
+  "message": "Item copied to clipboard"
+}
+```
+
+---
+
+### Toggle Pin
+
+Pin or unpin a clipboard item.
+
+```
+PUT /api/items/:id/pin
+```
+
+**Response:**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "isPinned": true,
+  "message": "Item pinned"
+}
+```
+
+---
+
+### Delete Item
+
+Remove an item from clipboard history.
+
+```
+DELETE /api/items/:id
+```
+
+**Response:**
+```json
+{
+  "message": "Item deleted successfully"
+}
+```
+
+---
+
+## Paste Endpoints
+
+These endpoints require **Accessibility permission** to simulate keyboard input.
+
+### Paste Item
+
+Copy an item to the clipboard AND simulate Cmd+V to paste it into the active application.
+
+```
+POST /api/items/:id/paste
+```
+
+**Response:**
+```json
+{
+  "message": "Item pasted successfully",
+  "pasteSimulated": true
+}
+```
+
+**Response (if Accessibility permission missing):**
+```json
+{
+  "message": "Item copied but paste simulation failed (check accessibility permissions)",
+  "pasteSimulated": false
+}
+```
+
+---
+
+### Paste Current Clipboard
+
+Simulate Cmd+V to paste whatever is currently in the system clipboard.
+
+```
+POST /api/paste
+```
+
+**Response:**
+```json
+{
+  "message": "Paste simulated successfully",
+  "pasteSimulated": true
+}
+```
+
+> **Important:** The target application must be focused before calling paste endpoints. Consider adding a delay in your automation to allow window focus.
 
 ---
 
 ## Error Responses
 
-### 400 Bad Request
+| Code | Description |
+|------|-------------|
+| `400` | Bad Request - Invalid JSON, missing required fields, or invalid ID |
+| `401` | Unauthorized - Missing or invalid token |
+| `404` | Not Found - Endpoint or resource doesn't exist |
+| `405` | Method Not Allowed - Wrong HTTP method |
+| `500` | Internal Server Error |
+
+**Example Error Response:**
 ```json
 {
-  "error": "Invalid request"
-}
-```
-
-### 401 Unauthorized
-```json
-{
-  "error": "Unauthorized"
-}
-```
-
-Missing or invalid Bearer token.
-
-### 404 Not Found
-```json
-{
-  "error": "Not found"
-}
-```
-
-Endpoint or resource doesn't exist.
-
-### 405 Method Not Allowed
-```json
-{
-  "error": "Method not allowed"
-}
-```
-
-Only GET requests are supported.
-
-### 500 Internal Server Error
-```json
-{
-  "error": "Database not initialized"
+  "error": "Invalid JSON body"
 }
 ```
 
 ---
 
-## Example Usage
+## Examples
 
 ### curl
 
@@ -269,20 +423,50 @@ Only GET requests are supported.
 TOKEN="your-api-token-here"
 
 # Health check
-curl -H "Authorization: Bearer $TOKEN" http://localhost:19847/api/health
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:19847/api/health
 
 # List items
-curl -H "Authorization: Bearer $TOKEN" http://localhost:19847/api/items
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:19847/api/items
+
+# Search items
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:19847/api/search?q=hello"
 
 # Get specific item
-curl -H "Authorization: Bearer $TOKEN" http://localhost:19847/api/items/550e8400-e29b-41d4-a716-446655440000
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:19847/api/items/UUID-HERE
 
-# List screenshots
-curl -H "Authorization: Bearer $TOKEN" http://localhost:19847/api/screenshots
+# Create a new item
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Hello from API", "sourceAppName": "My Script"}' \
+  http://localhost:19847/api/items
+
+# Copy item to clipboard
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:19847/api/items/UUID-HERE/copy
+
+# Paste item (copy + Cmd+V)
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:19847/api/items/UUID-HERE/paste
+
+# Paste current clipboard
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:19847/api/paste
+
+# Pin an item
+curl -X PUT -H "Authorization: Bearer $TOKEN" \
+  http://localhost:19847/api/items/UUID-HERE/pin
+
+# Delete an item
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  http://localhost:19847/api/items/UUID-HERE
 
 # Download screenshot
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:19847/api/screenshots/550e8400-e29b-41d4-a716-446655440002/image \
+  http://localhost:19847/api/screenshots/UUID-HERE/image \
   -o screenshot.png
 ```
 
@@ -290,60 +474,167 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ```python
 import requests
+import time
 
 BASE_URL = "http://localhost:19847"
 TOKEN = "your-api-token-here"
 
 headers = {
-    "Authorization": f"Bearer {TOKEN}"
+    "Authorization": f"Bearer {TOKEN}",
+    "Content-Type": "application/json"
 }
 
-# List all items
-response = requests.get(f"{BASE_URL}/api/items", headers=headers)
-items = response.json()["items"]
+# Create a new clipboard item
+def create_item(content, source="Python Script"):
+    response = requests.post(
+        f"{BASE_URL}/api/items",
+        headers=headers,
+        json={
+            "content": content,
+            "sourceAppName": source,
+            "type": "text"
+        }
+    )
+    return response.json()
 
-for item in items:
-    print(f"{item['type']}: {item['text'][:50]}...")
+# Search clipboard history
+def search(query):
+    response = requests.get(
+        f"{BASE_URL}/api/search",
+        headers=headers,
+        params={"q": query}
+    )
+    return response.json()
 
-# Get latest text item
-text_items = [i for i in items if i["type"] == "text"]
-if text_items:
-    item_id = text_items[0]["id"]
-    response = requests.get(f"{BASE_URL}/api/items/{item_id}", headers=headers)
-    content = response.json()["content"]
-    print(f"Latest text: {content}")
+# Paste an item (with delay for window focus)
+def paste_item(item_id, delay=0.5):
+    time.sleep(delay)  # Allow time to focus target window
+    response = requests.post(
+        f"{BASE_URL}/api/items/{item_id}/paste",
+        headers=headers
+    )
+    return response.json()
+
+# Get all screenshots
+def get_screenshots():
+    response = requests.get(
+        f"{BASE_URL}/api/screenshots",
+        headers=headers
+    )
+    return response.json()
+
+# Download a screenshot
+def download_screenshot(screenshot_id, filename):
+    response = requests.get(
+        f"{BASE_URL}/api/screenshots/{screenshot_id}/image",
+        headers=headers
+    )
+    with open(filename, "wb") as f:
+        f.write(response.content)
+
+# Example usage
+if __name__ == "__main__":
+    # Create an item
+    result = create_item("Hello from Python!")
+    print(f"Created: {result}")
+
+    # Search for it
+    results = search("Python")
+    print(f"Found {results['count']} items")
+
+    # Paste the first result
+    if results["items"]:
+        item_id = results["items"][0]["id"]
+        print("Focusing target window...")
+        paste_result = paste_item(item_id, delay=2)
+        print(f"Paste result: {paste_result}")
 ```
 
-### JavaScript/Node.js
+### JavaScript / Node.js
 
 ```javascript
 const BASE_URL = 'http://localhost:19847';
 const TOKEN = 'your-api-token-here';
 
-async function getClipboardItems() {
+const headers = {
+  'Authorization': `Bearer ${TOKEN}`,
+  'Content-Type': 'application/json'
+};
+
+// Create a new clipboard item
+async function createItem(content, source = 'Node.js') {
   const response = await fetch(`${BASE_URL}/api/items`, {
-    headers: {
-      'Authorization': `Bearer ${TOKEN}`
-    }
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      content,
+      sourceAppName: source,
+      type: 'text'
+    })
   });
-
-  const data = await response.json();
-  return data.items;
-}
-
-async function getItemContent(id) {
-  const response = await fetch(`${BASE_URL}/api/items/${id}`, {
-    headers: {
-      'Authorization': `Bearer ${TOKEN}`
-    }
-  });
-
   return response.json();
 }
 
-// Usage
-const items = await getClipboardItems();
-console.log(`Found ${items.length} items`);
+// Search clipboard history
+async function search(query) {
+  const response = await fetch(
+    `${BASE_URL}/api/search?q=${encodeURIComponent(query)}`,
+    { headers }
+  );
+  return response.json();
+}
+
+// Paste an item
+async function pasteItem(itemId) {
+  const response = await fetch(`${BASE_URL}/api/items/${itemId}/paste`, {
+    method: 'POST',
+    headers
+  });
+  return response.json();
+}
+
+// Copy item to clipboard (without pasting)
+async function copyItem(itemId) {
+  const response = await fetch(`${BASE_URL}/api/items/${itemId}/copy`, {
+    method: 'POST',
+    headers
+  });
+  return response.json();
+}
+
+// Get all items
+async function getItems() {
+  const response = await fetch(`${BASE_URL}/api/items`, { headers });
+  return response.json();
+}
+
+// Example usage
+(async () => {
+  // Create an item
+  const created = await createItem('Hello from Node.js!');
+  console.log('Created:', created);
+
+  // List all items
+  const items = await getItems();
+  console.log(`Total items: ${items.items.length}`);
+
+  // Search
+  const results = await search('Node');
+  console.log(`Found ${results.count} matching items`);
+})();
+```
+
+### Shortcuts / Automator (macOS)
+
+You can use the API from macOS Shortcuts or Automator:
+
+```bash
+# In a "Run Shell Script" action:
+curl -s -X POST \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "'"$1"'", "sourceAppName": "Shortcuts"}' \
+  http://localhost:19847/api/items
 ```
 
 ---
@@ -354,11 +645,13 @@ console.log(`Found ${items.length} items`);
 
 2. **Token Storage** - The API token is stored in macOS Keychain for security.
 
-3. **Read-Only** - The API is read-only. It cannot modify or delete clipboard items.
+3. **Write Limitations** - Only text and URL content types can be created via API. Images and files must be added through the clipboard.
 
-4. **No Sensitive Content** - Items marked as sensitive (passwords, API keys) are not returned with their content through the API.
+4. **Sensitive Content** - Items marked as sensitive are still accessible via API if you have the token. The sensitivity flag affects UI behavior (requires Touch ID to view).
 
-5. **CORS** - The API includes `Access-Control-Allow-Origin: *` headers for browser-based access.
+5. **Paste Permission** - The paste endpoints require Accessibility permission (`System Settings > Privacy & Security > Accessibility`).
+
+6. **CORS** - The API includes `Access-Control-Allow-Origin: *` headers for browser-based access.
 
 ---
 
@@ -367,16 +660,33 @@ console.log(`Found ${items.length} items`);
 ### API Not Responding
 
 1. Check that the API is enabled in Settings → Advanced
-2. Verify the correct port number
+2. Verify the correct port number (default: 19847)
 3. Check if another application is using the port
+4. Restart ClippyBoard after enabling the API
 
 ### Authentication Failing
 
 1. Ensure you're using the correct token from Settings
-2. Check the Authorization header format: `Bearer TOKEN`
-3. Try regenerating the token
+2. Check the Authorization header format: `Bearer TOKEN` (with space)
+3. Try regenerating the token in Settings
+4. Make sure there are no extra spaces or newlines in the token
+
+### Paste Not Working
+
+1. Grant Accessibility permission in System Settings
+2. Ensure the target application is focused before calling paste
+3. Add a delay (1-2 seconds) in your automation for window focus
+4. Check the `pasteSimulated` field in the response
+
+### Write Operations Failing
+
+1. Ensure you're using POST/PUT/DELETE methods correctly
+2. Include `Content-Type: application/json` header for POST requests
+3. Verify JSON body format (use single quotes in bash for JSON)
+4. Check that the item ID exists for update/delete operations
 
 ### Empty Response
 
 1. Clipboard history may be empty
 2. Check if Incognito mode is enabled (items won't be saved)
+3. Verify the app has been running to capture clipboard changes

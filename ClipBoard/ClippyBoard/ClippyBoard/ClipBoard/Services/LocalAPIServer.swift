@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import SwiftData
+import AppKit
 import os
 
 /// Local HTTP API server for agent compatibility
@@ -119,16 +120,58 @@ class LocalAPIServer: ObservableObject {
     }
 
     private func receiveRequest(on connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            if let data = data, !data.isEmpty {
-                Task { @MainActor in
-                    self?.processRequest(data: data, connection: connection)
+        // Accumulate all data until we have a complete request
+        var accumulatedData = Data()
+
+        func receiveChunk() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+                if let data = data {
+                    accumulatedData.append(data)
+                }
+
+                // Check if we have a complete HTTP request
+                if let requestString = String(data: accumulatedData, encoding: .utf8),
+                   requestString.contains("\r\n\r\n") {
+                    // Check Content-Length to see if we need the body
+                    if let contentLengthRange = requestString.range(of: "Content-Length: ", options: .caseInsensitive),
+                       let endOfLine = requestString[contentLengthRange.upperBound...].firstIndex(of: "\r"),
+                       let contentLength = Int(String(requestString[contentLengthRange.upperBound..<endOfLine])),
+                       let bodyStart = requestString.range(of: "\r\n\r\n") {
+
+                        let headerEndIndex = requestString.distance(from: requestString.startIndex, to: bodyStart.upperBound)
+                        let currentBodyLength = accumulatedData.count - headerEndIndex
+
+                        // Need more data for body
+                        if currentBodyLength < contentLength && !isComplete && error == nil {
+                            Task { @MainActor in
+                                receiveChunk()
+                            }
+                            return
+                        }
+                    }
+
+                    // Process the complete request
+                    Task { @MainActor in
+                        self?.processRequest(data: accumulatedData, connection: connection)
+                    }
+                    return
+                }
+
+                // Need more data for headers
+                if !isComplete && error == nil {
+                    Task { @MainActor in
+                        receiveChunk()
+                    }
+                } else {
+                    // Process whatever we have
+                    Task { @MainActor in
+                        self?.processRequest(data: accumulatedData, connection: connection)
+                    }
                 }
             }
-            if isComplete || error != nil {
-                connection.cancel()
-            }
         }
+
+        receiveChunk()
     }
 
     private func processRequest(data: Data, connection: NWConnection) {
@@ -170,33 +213,79 @@ class LocalAPIServer: ObservableObject {
             return
         }
 
+        // Extract request body (after blank line)
+        var requestBody: Data?
+        if let bodyStart = requestString.range(of: "\r\n\r\n") {
+            let bodyString = String(requestString[bodyStart.upperBound...])
+            requestBody = bodyString.data(using: .utf8)
+        }
+
         // Route request
         Task { @MainActor in
-            await self.routeRequest(method: method, path: path, connection: connection)
+            await self.routeRequest(method: method, path: path, body: requestBody, connection: connection)
         }
     }
 
-    private func routeRequest(method: String, path: String, connection: NWConnection) async {
-        guard method == "GET" else {
-            sendResponse(connection: connection, statusCode: 405, body: ["error": "Method not allowed"])
-            return
-        }
-
+    private func routeRequest(method: String, path: String, body: Data?, connection: NWConnection) async {
         // Parse path
         let pathComponents = path.split(separator: "/").map(String.init)
 
-        if pathComponents == ["api", "items"] {
-            await handleGetItems(connection: connection)
-        } else if pathComponents.count == 3 && pathComponents[0] == "api" && pathComponents[1] == "items" {
-            await handleGetItem(id: pathComponents[2], connection: connection)
-        } else if pathComponents == ["api", "screenshots"] {
-            await handleGetScreenshots(connection: connection)
-        } else if pathComponents.count == 4 && pathComponents[0] == "api" && pathComponents[1] == "screenshots" && pathComponents[3] == "image" {
-            await handleGetScreenshotImage(id: pathComponents[2], connection: connection)
-        } else if pathComponents == ["api", "health"] {
-            sendResponse(connection: connection, statusCode: 200, body: ["status": "ok", "version": "1.0"])
-        } else {
-            sendResponse(connection: connection, statusCode: 404, body: ["error": "Not found"])
+        switch method {
+        case "GET":
+            if pathComponents == ["api", "items"] {
+                await handleGetItems(connection: connection)
+            } else if pathComponents.count == 3 && pathComponents[0] == "api" && pathComponents[1] == "items" {
+                await handleGetItem(id: pathComponents[2], connection: connection)
+            } else if pathComponents == ["api", "screenshots"] {
+                await handleGetScreenshots(connection: connection)
+            } else if pathComponents.count == 4 && pathComponents[0] == "api" && pathComponents[1] == "screenshots" && pathComponents[3] == "image" {
+                await handleGetScreenshotImage(id: pathComponents[2], connection: connection)
+            } else if pathComponents == ["api", "health"] {
+                sendResponse(connection: connection, statusCode: 200, body: ["status": "ok", "version": "1.1"])
+            } else if pathComponents == ["api", "search"] {
+                // Extract query parameter
+                if let queryStart = path.range(of: "?q=") {
+                    let query = String(path[queryStart.upperBound...]).removingPercentEncoding ?? ""
+                    await handleSearch(query: query, connection: connection)
+                } else {
+                    sendResponse(connection: connection, statusCode: 400, body: ["error": "Missing query parameter 'q'"])
+                }
+            } else {
+                sendResponse(connection: connection, statusCode: 404, body: ["error": "Not found"])
+            }
+
+        case "POST":
+            if pathComponents == ["api", "items"] {
+                await handleCreateItem(body: body, connection: connection)
+            } else if pathComponents.count == 4 && pathComponents[0] == "api" && pathComponents[1] == "items" && pathComponents[3] == "copy" {
+                // POST /api/items/{id}/copy - Copy item to system clipboard
+                await handleCopyItem(id: pathComponents[2], connection: connection)
+            } else if pathComponents.count == 4 && pathComponents[0] == "api" && pathComponents[1] == "items" && pathComponents[3] == "paste" {
+                // POST /api/items/{id}/paste - Copy to clipboard and simulate Cmd+V
+                await handlePasteItem(id: pathComponents[2], connection: connection)
+            } else if pathComponents == ["api", "paste"] {
+                // POST /api/paste - Paste current clipboard content (just simulate Cmd+V)
+                await handlePasteClipboard(connection: connection)
+            } else {
+                sendResponse(connection: connection, statusCode: 404, body: ["error": "Not found"])
+            }
+
+        case "DELETE":
+            if pathComponents.count == 3 && pathComponents[0] == "api" && pathComponents[1] == "items" {
+                await handleDeleteItem(id: pathComponents[2], connection: connection)
+            } else {
+                sendResponse(connection: connection, statusCode: 404, body: ["error": "Not found"])
+            }
+
+        case "PUT":
+            if pathComponents.count == 4 && pathComponents[0] == "api" && pathComponents[1] == "items" && pathComponents[3] == "pin" {
+                await handleTogglePin(id: pathComponents[2], connection: connection)
+            } else {
+                sendResponse(connection: connection, statusCode: 404, body: ["error": "Not found"])
+            }
+
+        default:
+            sendResponse(connection: connection, statusCode: 405, body: ["error": "Method not allowed"])
         }
     }
 
@@ -323,6 +412,298 @@ class LocalAPIServer: ObservableObject {
         }
     }
 
+    // MARK: - Write Handlers (AI Agent Support)
+
+    private func handleCreateItem(body: Data?, connection: NWConnection) async {
+        guard let modelContainer = modelContainer else {
+            sendResponse(connection: connection, statusCode: 500, body: ["error": "Database not initialized"])
+            return
+        }
+
+        // Debug: check what body we received
+        guard let body = body else {
+            sendResponse(connection: connection, statusCode: 400, body: ["error": "No body received"])
+            return
+        }
+
+        // Trim any whitespace/newlines from the body
+        guard let bodyString = String(data: body, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bodyString.isEmpty,
+              let cleanBody = bodyString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: cleanBody) as? [String: Any] else {
+            let bodyPreview = String(data: body, encoding: .utf8)?.prefix(100) ?? "nil"
+            sendResponse(connection: connection, statusCode: 400, body: ["error": "Invalid JSON body", "received": String(bodyPreview)])
+            return
+        }
+
+        // Required field: content (text)
+        guard let content = json["content"] as? String else {
+            sendResponse(connection: connection, statusCode: 400, body: ["error": "Missing required field 'content'"])
+            return
+        }
+
+        // Optional fields
+        let contentType = (json["type"] as? String) ?? "text"
+        let sourceApp = json["sourceApp"] as? String
+        let sourceAppName = json["sourceAppName"] as? String ?? "API"
+        let isPinned = json["isPinned"] as? Bool ?? false
+        let isSensitive = json["isSensitive"] as? Bool ?? false
+
+        // Validate content type
+        guard ["text", "url"].contains(contentType) else {
+            sendResponse(connection: connection, statusCode: 400, body: ["error": "Only 'text' and 'url' types supported via API"])
+            return
+        }
+
+        let context = modelContainer.mainContext
+
+        // Create the item
+        let item = ClipboardItem(
+            content: content.data(using: .utf8) ?? Data(),
+            textContent: content,
+            contentType: contentType,
+            sourceApp: sourceApp,
+            sourceAppName: sourceAppName,
+            isPinned: isPinned,
+            characterCount: content.count,
+            searchableText: content.lowercased(),
+            isSensitive: isSensitive
+        )
+
+        context.insert(item)
+
+        do {
+            try context.save()
+            AppLogger.clipboard.info("Created item via API: \(item.id.uuidString)")
+
+            sendResponse(connection: connection, statusCode: 201, body: [
+                "id": item.id.uuidString,
+                "type": item.contentType,
+                "timestamp": ISO8601DateFormatter().string(from: item.timestamp),
+                "message": "Item created successfully"
+            ])
+        } catch {
+            sendResponse(connection: connection, statusCode: 500, body: ["error": error.localizedDescription])
+        }
+    }
+
+    private func handleDeleteItem(id: String, connection: NWConnection) async {
+        guard let modelContainer = modelContainer,
+              let uuid = UUID(uuidString: id) else {
+            sendResponse(connection: connection, statusCode: 400, body: ["error": "Invalid ID"])
+            return
+        }
+
+        let context = modelContainer.mainContext
+        let descriptor = FetchDescriptor<ClipboardItem>(
+            predicate: #Predicate { $0.id == uuid }
+        )
+
+        do {
+            let items = try context.fetch(descriptor)
+            guard let item = items.first else {
+                sendResponse(connection: connection, statusCode: 404, body: ["error": "Item not found"])
+                return
+            }
+
+            context.delete(item)
+            try context.save()
+            AppLogger.clipboard.info("Deleted item via API: \(id)")
+
+            sendResponse(connection: connection, statusCode: 200, body: ["message": "Item deleted successfully"])
+        } catch {
+            sendResponse(connection: connection, statusCode: 500, body: ["error": error.localizedDescription])
+        }
+    }
+
+    private func handleTogglePin(id: String, connection: NWConnection) async {
+        guard let modelContainer = modelContainer,
+              let uuid = UUID(uuidString: id) else {
+            sendResponse(connection: connection, statusCode: 400, body: ["error": "Invalid ID"])
+            return
+        }
+
+        let context = modelContainer.mainContext
+        let descriptor = FetchDescriptor<ClipboardItem>(
+            predicate: #Predicate { $0.id == uuid }
+        )
+
+        do {
+            let items = try context.fetch(descriptor)
+            guard let item = items.first else {
+                sendResponse(connection: connection, statusCode: 404, body: ["error": "Item not found"])
+                return
+            }
+
+            item.isPinned.toggle()
+            try context.save()
+            AppLogger.clipboard.info("Toggled pin via API: \(id) -> \(item.isPinned)")
+
+            sendResponse(connection: connection, statusCode: 200, body: [
+                "id": item.id.uuidString,
+                "isPinned": item.isPinned,
+                "message": item.isPinned ? "Item pinned" : "Item unpinned"
+            ])
+        } catch {
+            sendResponse(connection: connection, statusCode: 500, body: ["error": error.localizedDescription])
+        }
+    }
+
+    private func handleCopyItem(id: String, connection: NWConnection) async {
+        guard let modelContainer = modelContainer,
+              let uuid = UUID(uuidString: id) else {
+            sendResponse(connection: connection, statusCode: 400, body: ["error": "Invalid ID"])
+            return
+        }
+
+        let context = modelContainer.mainContext
+        let descriptor = FetchDescriptor<ClipboardItem>(
+            predicate: #Predicate { $0.id == uuid }
+        )
+
+        do {
+            let items = try context.fetch(descriptor)
+            guard let item = items.first else {
+                sendResponse(connection: connection, statusCode: 404, body: ["error": "Item not found"])
+                return
+            }
+
+            // Copy to system clipboard
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+
+            switch item.contentTypeEnum {
+            case .text, .url:
+                if let text = item.textContent {
+                    pasteboard.setString(text, forType: .string)
+                }
+            case .image:
+                if let image = NSImage(data: item.content) {
+                    pasteboard.writeObjects([image])
+                }
+            case .file:
+                if let pathsString = item.textContent {
+                    let paths = pathsString.components(separatedBy: "\n")
+                    let urls = paths.compactMap { URL(fileURLWithPath: $0) }
+                    pasteboard.writeObjects(urls as [NSURL])
+                }
+            }
+
+            AppLogger.clipboard.info("Copied item to clipboard via API: \(id)")
+            sendResponse(connection: connection, statusCode: 200, body: ["message": "Item copied to clipboard"])
+        } catch {
+            sendResponse(connection: connection, statusCode: 500, body: ["error": error.localizedDescription])
+        }
+    }
+
+    private func handlePasteItem(id: String, connection: NWConnection) async {
+        guard let modelContainer = modelContainer,
+              let uuid = UUID(uuidString: id) else {
+            sendResponse(connection: connection, statusCode: 400, body: ["error": "Invalid ID"])
+            return
+        }
+
+        let context = modelContainer.mainContext
+        let descriptor = FetchDescriptor<ClipboardItem>(
+            predicate: #Predicate { $0.id == uuid }
+        )
+
+        do {
+            let items = try context.fetch(descriptor)
+            guard let item = items.first else {
+                sendResponse(connection: connection, statusCode: 404, body: ["error": "Item not found"])
+                return
+            }
+
+            // Copy to system clipboard
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+
+            switch item.contentTypeEnum {
+            case .text, .url:
+                if let text = item.textContent {
+                    pasteboard.setString(text, forType: .string)
+                }
+            case .image:
+                if let image = NSImage(data: item.content) {
+                    pasteboard.writeObjects([image])
+                }
+            case .file:
+                if let pathsString = item.textContent {
+                    let paths = pathsString.components(separatedBy: "\n")
+                    let urls = paths.compactMap { URL(fileURLWithPath: $0) }
+                    pasteboard.writeObjects(urls as [NSURL])
+                }
+            }
+
+            // Small delay then simulate Cmd+V
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            let success = await AccessibilityService.shared.simulatePaste()
+
+            AppLogger.clipboard.info("Pasted item via API: \(id), success: \(success)")
+            sendResponse(connection: connection, statusCode: 200, body: [
+                "message": success ? "Item pasted successfully" : "Item copied but paste simulation failed (check accessibility permissions)",
+                "pasteSimulated": success
+            ])
+        } catch {
+            sendResponse(connection: connection, statusCode: 500, body: ["error": error.localizedDescription])
+        }
+    }
+
+    private func handlePasteClipboard(connection: NWConnection) async {
+        // Just simulate Cmd+V for whatever is currently in the clipboard
+        let success = await AccessibilityService.shared.simulatePaste()
+
+        AppLogger.clipboard.info("Paste clipboard via API, success: \(success)")
+        sendResponse(connection: connection, statusCode: 200, body: [
+            "message": success ? "Paste simulated successfully" : "Paste simulation failed (check accessibility permissions)",
+            "pasteSimulated": success
+        ])
+    }
+
+    private func handleSearch(query: String, connection: NWConnection) async {
+        guard let modelContainer = modelContainer else {
+            sendResponse(connection: connection, statusCode: 500, body: ["error": "Database not initialized"])
+            return
+        }
+
+        let context = modelContainer.mainContext
+        let lowercaseQuery = query.lowercased()
+
+        let descriptor = FetchDescriptor<ClipboardItem>(
+            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
+        )
+
+        do {
+            let allItems = try context.fetch(descriptor)
+
+            // Filter items that contain the search query
+            let matchingItems = allItems.filter { item in
+                item.searchableText.contains(lowercaseQuery) ||
+                (item.textContent?.lowercased().contains(lowercaseQuery) ?? false)
+            }
+
+            let response = matchingItems.prefix(50).map { item in
+                [
+                    "id": item.id.uuidString,
+                    "type": item.contentType,
+                    "text": item.textContent ?? "",
+                    "timestamp": ISO8601DateFormatter().string(from: item.timestamp),
+                    "sourceApp": item.sourceAppName ?? "",
+                    "isPinned": item.isPinned
+                ] as [String: Any]
+            }
+
+            sendResponse(connection: connection, statusCode: 200, body: [
+                "query": query,
+                "count": response.count,
+                "items": response
+            ])
+        } catch {
+            sendResponse(connection: connection, statusCode: 500, body: ["error": error.localizedDescription])
+        }
+    }
+
     // MARK: - Response Helpers
 
     private func sendResponse(connection: NWConnection, statusCode: Int, body: [String: Any]) {
@@ -371,6 +752,7 @@ class LocalAPIServer: ObservableObject {
     private func httpStatusText(for code: Int) -> String {
         switch code {
         case 200: return "OK"
+        case 201: return "Created"
         case 400: return "Bad Request"
         case 401: return "Unauthorized"
         case 404: return "Not Found"

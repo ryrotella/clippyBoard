@@ -43,7 +43,8 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
         )
 
         panel?.isFloatingPanel = true
-        panel?.level = .floating
+        // Use normal level if user wants windows to overlap the panel
+        panel?.level = settings.panelAlwaysOnTop ? .floating : .normal
         panel?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel?.isOpaque = false
         panel?.backgroundColor = .clear
@@ -78,10 +79,24 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
             name: .dismissClipboardUI,
             object: nil
         )
+
+        // Observe settings changes to update panel level
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSettingsChange),
+            name: UserDefaults.didChangeNotification,
+            object: nil
+        )
     }
 
     @objc private func handleDismissNotification() {
         hidePanel()
+    }
+
+    @objc private func handleSettingsChange() {
+        // Update panel level when settings change
+        let settings = AppSettings.shared
+        panel?.level = settings.panelAlwaysOnTop ? .floating : .normal
     }
 
     private func calculatePanelSize() -> NSSize {
@@ -194,7 +209,7 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
     // MARK: - Drag to Detach
 
     private func handleDrag(to location: NSPoint) {
-        guard let panel = panel, !isDetached else { return }
+        guard panel != nil, !isDetached else { return }
 
         let settings = AppSettings.shared
         let threshold: CGFloat = 100
@@ -267,6 +282,7 @@ struct SlidingPanelContentView: View {
     @EnvironmentObject private var clipboardService: ClipboardService
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var toastManager = ToastManager.shared
+    @Environment(\.openSettings) private var openSettings
 
     @State private var searchText = ""
     @State private var selectedType: ContentType?
@@ -288,7 +304,8 @@ struct SlidingPanelContentView: View {
             ClipboardContentView(
                 searchText: $searchText,
                 selectedType: $selectedType,
-                previewingImage: $previewingImage
+                previewingImage: $previewingImage,
+                onSettingsTapped: { openSettings() }
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -342,16 +359,6 @@ struct SlidingPanelContentView: View {
                 .font(.headline)
 
             Spacer()
-
-            // Settings button
-            Button(action: {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-            }) {
-                Image(systemName: "gear")
-                    .font(.body)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
 
             // Close button
             Button(action: { onClose?() }) {

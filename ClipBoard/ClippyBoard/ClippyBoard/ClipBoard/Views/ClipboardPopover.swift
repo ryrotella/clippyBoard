@@ -12,6 +12,7 @@ struct ClipboardContentView: View {
     @Binding var searchText: String
     @Binding var selectedType: ContentType?
     @Binding var previewingImage: ClipboardItem?
+    var onSettingsTapped: (() -> Void)? = nil
 
     /// Debounced search text that updates after a delay
     @State private var debouncedSearchText = ""
@@ -157,6 +158,17 @@ struct ClipboardContentView: View {
             }
 
             Spacer()
+
+            // Settings button (shown when callback provided, e.g., in sliding panel)
+            if let onSettings = onSettingsTapped {
+                Button(action: onSettings) {
+                    Image(systemName: "gear")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Settings")
+            }
         }
     }
 
@@ -280,7 +292,7 @@ struct ClipboardContentView: View {
                     NotificationCenter.default.post(name: .dismissClipboardUI, object: nil)
                     // Small delay to allow window to close
                     try? await Task.sleep(nanoseconds: 100_000_000)
-                    await AccessibilityService.shared.simulatePaste()
+                    _ = await AccessibilityService.shared.simulatePaste()
                 }
             }
         }

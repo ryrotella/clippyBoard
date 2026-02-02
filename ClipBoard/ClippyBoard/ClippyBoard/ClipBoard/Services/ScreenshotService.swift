@@ -124,7 +124,6 @@ class ScreenshotService: ObservableObject {
     }
 
     private func loadAndProcessScreenshot(path: String, creationDate: Date) async {
-        let fileManager = FileManager.default
         let url = URL(fileURLWithPath: path)
 
         // Debug: Check file accessibility

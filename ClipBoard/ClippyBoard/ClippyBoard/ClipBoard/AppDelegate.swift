@@ -19,6 +19,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var quickAccessHotKeyRefs: [EventHotKeyRef?] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hide dock icon but allow app to appear in Force Quit menu
+        // This replaces LSUIElement which prevents Force Quit visibility
+        NSApp.setActivationPolicy(.accessory)
+
         // Initialize model container
         setupModelContainer()
 
@@ -233,7 +237,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
 
-        if event.type == .rightMouseUp {
+        // Show menu on right-click OR Option+Click (common macOS pattern)
+        let showMenu = event.type == .rightMouseUp || event.modifierFlags.contains(.option)
+
+        if showMenu {
             // Update incognito state before showing menu
             if let incognitoItem = statusMenu.item(withTitle: "Incognito Mode") {
                 incognitoItem.state = AppSettings.shared.incognitoMode ? .on : .off
@@ -243,16 +250,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let shortcutHint = AppSettings.shared.popoverShortcut.displayString
                 openItem.title = "Open ClipBoard (\(shortcutHint))"
             }
-            statusItem.menu = statusMenu
-            statusItem.button?.performClick(nil)
-            statusItem.menu = nil // Reset so left-click works normally
+            // Show menu at the status item location
+            if let button = statusItem.button {
+                statusMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 5), in: button)
+            }
         } else {
             togglePopover()
         }
     }
 
     @objc private func openSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        // Use the correct selector for opening Settings in SwiftUI apps
+        if #available(macOS 14.0, *) {
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        } else {
+            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -359,7 +372,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if AppSettings.shared.clickToPaste {
                 // Small delay to ensure clipboard is ready
                 try? await Task.sleep(nanoseconds: 50_000_000)
-                await AccessibilityService.shared.simulatePaste()
+                _ = await AccessibilityService.shared.simulatePaste()
             }
 
             // Show feedback

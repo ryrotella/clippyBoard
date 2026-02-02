@@ -83,13 +83,21 @@ struct SettingsView: View {
                             Text(edge.displayName).tag(edge.rawValue)
                         }
                     }
+
+                    Toggle("Keep Panel on Top", isOn: $settings.panelAlwaysOnTop)
                 }
             } header: {
                 Text("Window Style")
             } footer: {
-                Text("Sliding Panel slides from screen edge. Classic Popover appears from menu bar.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if settings.panelModeSetting == .slidingPanel && !settings.panelAlwaysOnTop {
+                    Text("Panel can be overlapped by other windows. Click menu bar icon to bring it back.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Sliding Panel slides from screen edge. Classic Popover appears from menu bar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
@@ -361,6 +369,29 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             } header: {
                 Text("Security")
+            }
+
+            Section {
+                Toggle("Detect Private Browsing", isOn: $settings.privateBrowsingDetection)
+                Text("Automatically detect incognito/private browsing windows in Safari, Chrome, Firefox, Edge, Brave, and other browsers.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if settings.privateBrowsingDetection {
+                    Picker("When Detected", selection: $settings.privateBrowsingAction) {
+                        Text("Don't save").tag("skip")
+                        Text("Mark as sensitive").tag("sensitive")
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text(settings.privateBrowsingAction == "skip"
+                         ? "Clipboard content from private windows will not be saved."
+                         : "Clipboard content from private windows will be saved but marked as sensitive.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Private Browsing")
             }
 
             Section {

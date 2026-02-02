@@ -123,40 +123,56 @@ extension ClipboardItem: Transferable {
     }
 }
 
-/// Provides drag data for ClipboardItem
+/// Provides drag data for ClipboardItem - captures data upfront to avoid SwiftData threading issues
 struct ClipboardItemDragData: Transferable {
-    let item: ClipboardItem
+    // Captured values from ClipboardItem (thread-safe)
+    let contentType: ContentType
+    let content: Data
+    let textContent: String?
+    let firstFilePath: String?
+    let thumbnailData: Data?
+
+    /// Initialize by capturing all necessary data from the ClipboardItem
+    /// MUST be called on the main thread
+    @MainActor
+    init(item: ClipboardItem) {
+        self.contentType = item.contentTypeEnum
+        self.content = item.content
+        self.textContent = item.textContent
+        self.firstFilePath = item.firstFilePath
+        self.thumbnailData = item.thumbnailData
+    }
 
     static var transferRepresentation: some TransferRepresentation {
         // Text content
         DataRepresentation(exportedContentType: .utf8PlainText) { dragData in
-            if let text = dragData.item.textContent {
+            if let text = dragData.textContent {
                 return text.data(using: .utf8) ?? Data()
             }
             return Data()
         }
         .exportingCondition { dragData in
-            dragData.item.contentTypeEnum == .text || dragData.item.contentTypeEnum == .url
+            dragData.contentType == .text || dragData.contentType == .url
         }
 
         // Image content
         DataRepresentation(exportedContentType: .png) { dragData in
-            dragData.item.content
+            dragData.content
         }
         .exportingCondition { dragData in
-            dragData.item.contentTypeEnum == .image
+            dragData.contentType == .image
         }
 
         // File URL content
         DataRepresentation(exportedContentType: .fileURL) { dragData in
-            if let path = dragData.item.firstFilePath,
+            if let path = dragData.firstFilePath,
                let url = URL(string: "file://\(path)") {
                 return url.absoluteString.data(using: .utf8) ?? Data()
             }
             return Data()
         }
         .exportingCondition { dragData in
-            dragData.item.contentTypeEnum == .file
+            dragData.contentType == .file
         }
     }
 }

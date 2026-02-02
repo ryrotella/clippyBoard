@@ -17,6 +17,78 @@ class ClipboardService: ObservableObject {
         static let captureAnimationDuration: UInt64 = 300_000_000
     }
 
+    // MARK: - Browser Detection
+
+    /// Known browser bundle identifiers for incognito detection
+    private static let browserBundleIDs: Set<String> = [
+        "com.apple.Safari",
+        "com.google.Chrome",
+        "com.google.Chrome.canary",
+        "org.chromium.Chromium",
+        "com.microsoft.edgemac",
+        "com.microsoft.edgemac.Dev",
+        "com.brave.Browser",
+        "com.operasoftware.Opera",
+        "org.mozilla.firefox",
+        "org.mozilla.firefoxdeveloperedition",
+        "com.vivaldi.Vivaldi",
+        "company.thebrowser.Browser",  // Arc
+        "com.electron.orion"  // Orion
+    ]
+
+    /// Keywords in window titles that indicate private/incognito mode
+    private static let privateWindowKeywords: [String] = [
+        "Private",           // Safari
+        "Incognito",         // Chrome, Brave
+        "InPrivate",         // Edge
+        "Private Browsing",  // Firefox
+        "[Private]"          // Various
+    ]
+
+    /// Check if the frontmost app appears to be in private/incognito mode
+    private func isPrivateBrowsingActive() -> Bool {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication,
+              let bundleID = frontApp.bundleIdentifier,
+              Self.browserBundleIDs.contains(bundleID) else {
+            return false
+        }
+
+        // Try to get the frontmost window title using Accessibility API
+        guard let windowTitle = getFrontmostWindowTitle(for: frontApp) else {
+            return false
+        }
+
+        // Check if window title contains any private browsing keywords
+        for keyword in Self.privateWindowKeywords {
+            if windowTitle.localizedCaseInsensitiveContains(keyword) {
+                AppLogger.clipboard.info("Detected private browsing window: \(windowTitle, privacy: .public)")
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Get the title of the frontmost window for an application
+    private func getFrontmostWindowTitle(for app: NSRunningApplication) -> String? {
+        let pid = app.processIdentifier
+        let appRef = AXUIElementCreateApplication(pid)
+
+        var frontWindow: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appRef, kAXFocusedWindowAttribute as CFString, &frontWindow) == .success,
+              let window = frontWindow else {
+            return nil
+        }
+
+        var titleValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &titleValue) == .success,
+              let title = titleValue as? String else {
+            return nil
+        }
+
+        return title
+    }
+
     // MARK: - Published Properties
 
     @Published var isMonitoring = false
@@ -102,9 +174,21 @@ class ClipboardService: ObservableObject {
             return
         }
 
-        // Check incognito mode
+        // Check incognito mode (manual toggle)
         if AppSettings.shared.incognitoMode {
             return
+        }
+
+        // Check for private browsing detection
+        var forceMarkSensitive = false
+        if AppSettings.shared.privateBrowsingDetection && isPrivateBrowsingActive() {
+            if AppSettings.shared.privateBrowsingAction == "skip" {
+                AppLogger.clipboard.info("Skipping capture from private browsing window")
+                return
+            } else {
+                // Mark as sensitive instead of skipping
+                forceMarkSensitive = true
+            }
         }
 
         // Determine content type and extract content
@@ -195,9 +279,14 @@ class ClipboardService: ObservableObject {
             }
 
             // Detect sensitive content (passwords, API keys, tokens) if protection is enabled
-            let isSensitive = AppSettings.shared.sensitiveContentProtection && SensitiveContentDetector.isSensitive(string)
-            if isSensitive {
+            // Also mark as sensitive if from private browsing and that option is selected
+            let detectedSensitive = AppSettings.shared.sensitiveContentProtection && SensitiveContentDetector.isSensitive(string)
+            let isSensitive = detectedSensitive || forceMarkSensitive
+            if detectedSensitive {
                 AppLogger.clipboard.info("Detected sensitive content (API key, token, or password)")
+            }
+            if forceMarkSensitive {
+                AppLogger.clipboard.info("Marked as sensitive (from private browsing window)")
             }
 
             let contentType = detectContentType(for: string)

@@ -116,7 +116,7 @@ struct OnboardingView: View {
                     .font(.title2)
                     .fontWeight(.semibold)
 
-                Text("This permission enables click-to-paste, so items paste directly into your active app.")
+                Text("This permission enables click-to-paste and API paste automation, so items paste directly into your active app.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

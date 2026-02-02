@@ -1,9 +1,27 @@
 import SwiftUI
+import SwiftData
 
+/// Drag preview that captures data upfront to avoid SwiftData threading issues
 struct ClipboardItemDragPreview: View {
-    let item: ClipboardItem
+    // Captured values from ClipboardItem (thread-safe)
+    let contentType: ContentType
+    let displayText: String
+    let textContent: String?
+    let content: Data
+    let thumbnailImage: NSImage?
 
     private var previewSize: CGFloat { 80 }
+
+    /// Initialize by capturing all necessary data from the ClipboardItem
+    /// MUST be called on the main thread
+    @MainActor
+    init(item: ClipboardItem) {
+        self.contentType = item.contentTypeEnum
+        self.displayText = item.displayText
+        self.textContent = item.textContent
+        self.content = item.content
+        self.thumbnailImage = item.thumbnailImage
+    }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -12,7 +30,7 @@ struct ClipboardItemDragPreview: View {
                 .cornerRadius(8)
                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
 
-            Text(item.contentTypeEnum.displayName)
+            Text(contentType.displayName)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 6)
@@ -25,14 +43,14 @@ struct ClipboardItemDragPreview: View {
 
     @ViewBuilder
     private var previewContent: some View {
-        switch item.contentTypeEnum {
+        switch contentType {
         case .text:
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(nsColor: .controlBackgroundColor))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.displayText.prefix(50))
+                    Text(displayText.prefix(50))
                         .font(.system(size: 9))
                         .foregroundStyle(.primary)
                         .lineLimit(4)
@@ -42,7 +60,7 @@ struct ClipboardItemDragPreview: View {
             }
 
         case .image:
-            if let nsImage = NSImage(data: item.content) {
+            if let nsImage = NSImage(data: content) {
                 Image(nsImage: nsImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -62,7 +80,7 @@ struct ClipboardItemDragPreview: View {
                         .font(.system(size: 24))
                         .foregroundStyle(.blue)
 
-                    if let text = item.textContent {
+                    if let text = textContent {
                         Text(text.prefix(30))
                             .font(.system(size: 8))
                             .foregroundStyle(.secondary)
@@ -74,7 +92,7 @@ struct ClipboardItemDragPreview: View {
 
         case .file:
             ZStack {
-                if let thumbnail = item.thumbnailImage {
+                if let thumbnail = thumbnailImage {
                     Image(nsImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -98,7 +116,7 @@ struct ClipboardItemDragPreview: View {
                             .font(.system(size: 24))
                             .foregroundStyle(.orange)
 
-                        if let text = item.textContent {
+                        if let text = textContent {
                             Text(text.prefix(20))
                                 .font(.system(size: 8))
                                 .foregroundStyle(.secondary)
@@ -127,25 +145,34 @@ struct ClipboardItemDragPreview: View {
 
 #Preview {
     HStack(spacing: 20) {
-        ClipboardItemDragPreview(item: ClipboardItem(
-            content: "Hello, World! This is some sample text.".data(using: .utf8)!,
+        // Text preview
+        ClipboardItemDragPreview(
+            contentType: .text,
+            displayText: "Hello, World! This is some sample text.",
             textContent: "Hello, World! This is some sample text.",
-            contentType: "text",
-            sourceApp: nil,
-            sourceAppName: nil,
-            characterCount: 40,
-            searchableText: "hello"
-        ))
+            content: "Hello, World! This is some sample text.".data(using: .utf8)!,
+            thumbnailImage: nil
+        )
 
-        ClipboardItemDragPreview(item: ClipboardItem(
-            content: "https://apple.com".data(using: .utf8)!,
+        // URL preview
+        ClipboardItemDragPreview(
+            contentType: .url,
+            displayText: "https://apple.com",
             textContent: "https://apple.com",
-            contentType: "url",
-            sourceApp: nil,
-            sourceAppName: nil,
-            characterCount: 17,
-            searchableText: "apple"
-        ))
+            content: "https://apple.com".data(using: .utf8)!,
+            thumbnailImage: nil
+        )
     }
     .padding()
+}
+
+// Internal initializer for previews only
+extension ClipboardItemDragPreview {
+    init(contentType: ContentType, displayText: String, textContent: String?, content: Data, thumbnailImage: NSImage?) {
+        self.contentType = contentType
+        self.displayText = displayText
+        self.textContent = textContent
+        self.content = content
+        self.thumbnailImage = thumbnailImage
+    }
 }

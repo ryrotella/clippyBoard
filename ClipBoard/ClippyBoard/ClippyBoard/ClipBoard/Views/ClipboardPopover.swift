@@ -7,6 +7,7 @@ struct ClipboardContentView: View {
     @EnvironmentObject private var clipboardService: ClipboardService
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var authService = AuthenticationService.shared
+    @ObservedObject private var toastManager = ToastManager.shared
 
     @Binding var searchText: String
     @Binding var selectedType: ContentType?
@@ -93,6 +94,12 @@ struct ClipboardContentView: View {
                 // Task was cancelled (new search text entered), which is expected
             }
         }
+        .toast(
+            isShowing: $toastManager.isShowingCopyToast,
+            message: "Copied!",
+            icon: "checkmark.circle.fill",
+            playSound: settings.copyFeedbackSound
+        )
         .onChange(of: searchText) { _, newValue in
             // If search is cleared, update immediately without debounce
             if newValue.isEmpty {
@@ -106,26 +113,29 @@ struct ClipboardContentView: View {
     private var searchBar: some View {
         HStack {
             Image(systemName: "magnifyingglass")
+                .font(.body)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
 
             TextField("Search clipboard...", text: $searchText)
                 .textFieldStyle(.plain)
+                .font(.body)
                 .accessibilityLabel("Search")
                 .accessibilityHint("Type to filter clipboard items")
 
             if !searchText.isEmpty {
                 Button(action: { searchText = "" }) {
                     Image(systemName: "xmark.circle.fill")
+                        .font(.body)
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search")
             }
         }
-        .padding(8)
+        .padding(10)
         .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(8)
+        .cornerRadius(10)
     }
 
     // MARK: - Filters
@@ -189,21 +199,28 @@ struct ClipboardContentView: View {
         let isRevealed = !item.isSensitive || revealedItems.contains(item.id)
 
         VStack(spacing: 0) {
-            ClipboardItemRow(item: item, isRevealed: isRevealed)
+            ClipboardItemRow(
+                item: item,
+                isRevealed: isRevealed,
+                onCopyTapped: {
+                    // Copy button: copy to clipboard only (no paste)
+                    handleCopyOnly(item)
+                }
+            )
                 .onTapGesture(count: 2) {
                     // Double-tap: preview for images, copy for others
                     if item.contentTypeEnum == .image {
                         previewingImage = item
                     } else {
-                        handleCopy(item)
+                        handlePaste(item)
                     }
                 }
                 .onTapGesture(count: 1) {
-                    // Single tap: reveal if sensitive, otherwise copy
+                    // Single tap: reveal if sensitive, otherwise paste
                     if item.isSensitive && !isRevealed {
                         handleReveal(item)
                     } else {
-                        handleCopy(item)
+                        handlePaste(item)
                     }
                 }
                 .contextMenu {
@@ -232,14 +249,46 @@ struct ClipboardContentView: View {
         }
     }
 
-    /// Handle copying with authentication for sensitive items
-    private func handleCopy(_ item: ClipboardItem) {
+    /// Handle copying with authentication for sensitive items (copy only, no paste)
+    private func handleCopyOnly(_ item: ClipboardItem) {
         Task {
             let success = await clipboardService.copyToClipboardWithAuth(item)
-            if success && item.isSensitive {
-                revealedItems.insert(item.id)
+            if success {
+                if item.isSensitive {
+                    revealedItems.insert(item.id)
+                }
+                // Show copy feedback
+                NotificationCenter.default.post(name: .didCopyItem, object: nil)
             }
         }
+    }
+
+    /// Handle paste action (copy to clipboard and paste to active app if enabled)
+    private func handlePaste(_ item: ClipboardItem) {
+        Task {
+            let success = await clipboardService.copyToClipboardWithAuth(item)
+            if success {
+                if item.isSensitive {
+                    revealedItems.insert(item.id)
+                }
+                // Show copy feedback
+                NotificationCenter.default.post(name: .didCopyItem, object: nil)
+
+                // If click-to-paste is enabled, paste to active app
+                if AppSettings.shared.clickToPaste {
+                    // Close popover/panel first to return focus
+                    NotificationCenter.default.post(name: .dismissClipboardUI, object: nil)
+                    // Small delay to allow window to close
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    await AccessibilityService.shared.simulatePaste()
+                }
+            }
+        }
+    }
+
+    /// Legacy copy handler for context menu
+    private func handleCopy(_ item: ClipboardItem) {
+        handleCopyOnly(item)
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -380,7 +429,7 @@ struct ClipboardPopover: View {
                 previewingImage: $previewingImage
             )
         }
-        .frame(width: 340, height: 480)
+        .frame(width: 380, height: 520)
         .opacity(settings.windowOpacity)
         .preferredColorScheme(settings.appearanceMode.colorScheme)
     }
@@ -439,15 +488,15 @@ struct FilterChip: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.caption)
+                .font(.subheadline)
                 .fontWeight(isSelected ? .medium : .regular)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
                 .background(isSelected ? accentColor.opacity(0.2) : Color.clear)
                 .foregroundStyle(isSelected ? accentColor : .secondary)
-                .cornerRadius(12)
+                .cornerRadius(14)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 14)
                         .stroke(isSelected ? accentColor.opacity(0.5) : Color.secondary.opacity(0.3), lineWidth: 1)
                 )
         }

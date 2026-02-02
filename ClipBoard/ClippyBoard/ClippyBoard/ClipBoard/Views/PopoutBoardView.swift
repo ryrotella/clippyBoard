@@ -86,5 +86,5 @@ struct PopoutBoardView: View {
 #Preview {
     PopoutBoardView()
         .environmentObject(ClipboardService())
-        .frame(width: 340, height: 500)
+        .frame(width: 380, height: 540)
 }

@@ -6,9 +6,12 @@ struct SettingsView: View {
     @EnvironmentObject private var clipboardService: ClipboardService
 
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var permissionService = PermissionService.shared
+    @ObservedObject private var apiServer = LocalAPIServer.shared
 
     @State private var showingClearConfirmation = false
     @State private var launchAtLogin = LaunchAtLoginService.shared.isEnabled
+    @State private var showingTokenCopied = false
 
     var body: some View {
         TabView {
@@ -32,12 +35,17 @@ struct SettingsView: View {
                     Label("Privacy", systemImage: "hand.raised")
                 }
 
+            advancedTab
+                .tabItem {
+                    Label("Advanced", systemImage: "gearshape.2")
+                }
+
             aboutTab
                 .tabItem {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 500, height: 420)
+        .frame(width: 520, height: 480)
         .preferredColorScheme(settings.appearanceMode.colorScheme)
     }
 
@@ -60,6 +68,61 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("Behavior")
+            }
+
+            Section {
+                Picker("Window Mode", selection: $settings.panelMode) {
+                    ForEach(PanelMode.allCases, id: \.rawValue) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+
+                if settings.panelModeSetting == .slidingPanel {
+                    Picker("Panel Edge", selection: $settings.panelEdge) {
+                        ForEach(PanelEdge.allCases, id: \.rawValue) { edge in
+                            Text(edge.displayName).tag(edge.rawValue)
+                        }
+                    }
+                }
+            } header: {
+                Text("Window Style")
+            } footer: {
+                Text("Sliding Panel slides from screen edge. Classic Popover appears from menu bar.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Click-to-Paste", isOn: $settings.clickToPaste)
+
+                if !permissionService.hasAccessibilityPermission {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Requires Accessibility permission")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Grant") {
+                            permissionService.requestAccessibilityPermission()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            } header: {
+                Text("Paste Behavior")
+            } footer: {
+                Text("When enabled, clicking an item pastes it directly. Otherwise, it only copies to clipboard.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Show Copy Feedback Toast", isOn: $settings.copyFeedbackToast)
+                Toggle("Play Sound on Copy", isOn: $settings.copyFeedbackSound)
+            } header: {
+                Text("Feedback")
             }
         }
         .formStyle(.grouped)
@@ -193,8 +256,16 @@ struct SettingsView: View {
                 Toggle("Show Source App Icon", isOn: $settings.showSourceAppIcon)
                 Toggle("Show Timestamps", isOn: $settings.showTimestamps)
                 Toggle("Show Type Badges", isOn: $settings.showTypeBadges)
+                Toggle("Show Copy Button", isOn: $settings.showCopyButton)
+                Toggle("Simplified Display", isOn: $settings.simplifiedDisplay)
             } header: {
                 Text("Display Elements")
+            } footer: {
+                if settings.simplifiedDisplay {
+                    Text("Simplified mode hides type badges and shows minimal information.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
@@ -231,6 +302,31 @@ struct SettingsView: View {
                 Text("Global Keyboard Shortcuts")
             } footer: {
                 Text("Click the field and press your desired key combination. These shortcuts work system-wide.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Quick Access Shortcuts", isOn: $settings.quickAccessShortcutsEnabled)
+
+                if settings.quickAccessShortcutsEnabled {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(1...5, id: \.self) { index in
+                            HStack {
+                                Text("⌥\(index)")
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                Text("Paste item #\(index)")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } header: {
+                Text("Quick Access")
+            } footer: {
+                Text("Use ⌥1 through ⌥5 to instantly paste recent items.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -323,6 +419,138 @@ struct SettingsView: View {
         .padding()
     }
 
+    // MARK: - Advanced Tab
+
+    private var advancedTab: some View {
+        Form {
+            Section {
+                Toggle("Enable Local API", isOn: $settings.apiEnabled)
+                    .onChange(of: settings.apiEnabled) { _, newValue in
+                        if newValue {
+                            LocalAPIServer.shared.start()
+                        } else {
+                            LocalAPIServer.shared.stop()
+                        }
+                    }
+
+                if settings.apiEnabled {
+                    HStack {
+                        Text("Port")
+                        Spacer()
+                        TextField("Port", value: $settings.apiPort, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+                    }
+
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(apiServer.isRunning ? .green : .red)
+                                .frame(width: 8, height: 8)
+                            Text(apiServer.isRunning ? "Running" : "Stopped")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let token = apiServer.currentToken {
+                        HStack {
+                            Text("API Token")
+                            Spacer()
+                            Text(token.prefix(8) + "...")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(token, forType: .string)
+                                showingTokenCopied = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    showingTokenCopied = false
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+
+                        if showingTokenCopied {
+                            Text("Token copied!")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                    }
+
+                    Button("Regenerate Token") {
+                        apiServer.regenerateToken()
+                    }
+                    .foregroundStyle(.red)
+                }
+            } header: {
+                Text("Agent API")
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Local HTTP API for agents and automation tools.")
+                    Text("Endpoints: GET /api/items, /api/screenshots")
+                    Text("Authentication: Bearer token in header")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Section {
+                HStack {
+                    Text("Accessibility")
+                    Spacer()
+                    if permissionService.hasAccessibilityPermission {
+                        Label("Granted", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        Button("Grant") {
+                            permissionService.requestAccessibilityPermission()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                HStack {
+                    Text("Full Disk Access")
+                    Spacer()
+                    if permissionService.hasFullDiskAccess {
+                        Label("Granted", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        Button("Open Settings") {
+                            permissionService.openFullDiskAccessSettings()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            } header: {
+                Text("Permissions")
+            } footer: {
+                Text("Accessibility enables click-to-paste. Full Disk Access enables screenshot history.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Button("Show Onboarding Again") {
+                    settings.onboardingCompleted = false
+                }
+
+                Button("Reset All Settings") {
+                    settings.resetAppearanceToDefaults()
+                    settings.resetShortcutsToDefaults()
+                }
+                .foregroundStyle(.red)
+            } header: {
+                Text("Reset")
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
     // MARK: - About Tab
 
     private var aboutTab: some View {
@@ -348,8 +576,13 @@ struct SettingsView: View {
             Spacer()
 
             HStack(spacing: 20) {
-                Button("Website") {
+                Button("Github") {
                     if let url = URL(string: "https://github.com/ryrotella/clippyBoard") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                Button("Made by Ryan Rotella") {
+                    if let url = URL(string: "https://rotella.tech") {
                         NSWorkspace.shared.open(url)
                     }
                 }

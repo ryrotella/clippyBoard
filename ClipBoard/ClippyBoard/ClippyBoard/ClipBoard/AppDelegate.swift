@@ -8,12 +8,15 @@ import os
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
+    private var statusMenu: NSMenu!
     private var clipboardService: ClipboardService!
     private var screenshotService: ScreenshotService!
     private var modelContainer: ModelContainer!
     private var popoutWindowController: PopoutBoardWindowController?
+    private var slidingPanelController: SlidingPanelWindowController?
     private var hotKeyRef: EventHotKeyRef?
     private var popoutHotKeyRef: EventHotKeyRef?
+    private var quickAccessHotKeyRefs: [EventHotKeyRef?] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize model container
@@ -32,6 +35,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.triggerCaptureAnimation()
         }
         screenshotService.startMonitoring()
+
+        // Initialize local API server
+        LocalAPIServer.shared.setModelContainer(modelContainer)
+        if AppSettings.shared.apiEnabled {
+            LocalAPIServer.shared.start()
+        }
 
         // Setup status bar item
         setupStatusItem()
@@ -66,6 +75,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: .openPopoutBoard,
             object: nil
         )
+
+        // Show onboarding if first launch
+        checkOnboarding()
+    }
+
+    private func checkOnboarding() {
+        if !AppSettings.shared.onboardingCompleted {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.showOnboarding()
+            }
+        }
+    }
+
+    private func showOnboarding() {
+        let onboardingWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 520),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        onboardingWindow.title = "Welcome to ClipBoard"
+        onboardingWindow.center()
+        onboardingWindow.contentView = NSHostingView(rootView: OnboardingView())
+        onboardingWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func setupModelContainer() {
@@ -159,9 +193,75 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "ClipBoard")
-            button.action = #selector(togglePopover)
+            // Use sendAction to detect both left and right clicks
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.action = #selector(handleStatusItemClick(_:))
             button.target = self
         }
+
+        // Setup right-click menu
+        setupStatusMenu()
+    }
+
+    private func setupStatusMenu() {
+        statusMenu = NSMenu()
+
+        let openItem = NSMenuItem(title: "Open ClipBoard", action: #selector(togglePopover), keyEquivalent: "")
+        openItem.target = self
+        let shortcutHint = AppSettings.shared.popoverShortcut.displayString
+        openItem.title = "Open ClipBoard (\(shortcutHint))"
+        statusMenu.addItem(openItem)
+
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        statusMenu.addItem(settingsItem)
+
+        statusMenu.addItem(NSMenuItem.separator())
+
+        let incognitoItem = NSMenuItem(title: "Incognito Mode", action: #selector(toggleIncognitoMode), keyEquivalent: "")
+        incognitoItem.target = self
+        incognitoItem.state = AppSettings.shared.incognitoMode ? .on : .off
+        statusMenu.addItem(incognitoItem)
+
+        statusMenu.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(title: "Quit ClipBoard", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        statusMenu.addItem(quitItem)
+    }
+
+    @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else { return }
+
+        if event.type == .rightMouseUp {
+            // Update incognito state before showing menu
+            if let incognitoItem = statusMenu.item(withTitle: "Incognito Mode") {
+                incognitoItem.state = AppSettings.shared.incognitoMode ? .on : .off
+            }
+            // Update menu item title for shortcut hint
+            if let openItem = statusMenu.items.first {
+                let shortcutHint = AppSettings.shared.popoverShortcut.displayString
+                openItem.title = "Open ClipBoard (\(shortcutHint))"
+            }
+            statusItem.menu = statusMenu
+            statusItem.button?.performClick(nil)
+            statusItem.menu = nil // Reset so left-click works normally
+        } else {
+            togglePopover()
+        }
+    }
+
+    @objc private func openSettings() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func toggleIncognitoMode() {
+        AppSettings.shared.incognitoMode.toggle()
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
     }
 
     private func setupPopover() {
@@ -200,6 +300,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     NotificationCenter.default.post(name: .toggleClipboardPopover, object: nil)
                 case 2:
                     NotificationCenter.default.post(name: .togglePopoutBoard, object: nil)
+                case 3...7:
+                    // Quick access shortcuts (⌥1 through ⌥5)
+                    let itemIndex = Int(hotKeyID.id) - 3
+                    NotificationCenter.default.post(
+                        name: .quickAccessPaste,
+                        object: nil,
+                        userInfo: ["index": itemIndex]
+                    )
                 default:
                     break
                 }
@@ -222,6 +330,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: .shortcutsDidChange,
             object: nil
         )
+
+        // Listen for quick access paste notifications
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleQuickAccessPaste(_:)),
+            name: .quickAccessPaste,
+            object: nil
+        )
+    }
+
+    @objc private func handleQuickAccessPaste(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let index = userInfo["index"] as? Int else { return }
+
+        Task { @MainActor in
+            // Get the item at the specified index
+            let items = clipboardService.items.filter { !$0.isPinned }
+            guard index < items.count else { return }
+
+            let item = items[index]
+
+            // Copy to clipboard
+            let success = await clipboardService.copyToClipboardWithAuth(item)
+            guard success else { return }
+
+            // Simulate paste if enabled
+            if AppSettings.shared.clickToPaste {
+                // Small delay to ensure clipboard is ready
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                await AccessibilityService.shared.simulatePaste()
+            }
+
+            // Show feedback
+            NotificationCenter.default.post(name: .didCopyItem, object: nil)
+        }
     }
 
     @objc private func shortcutsDidChange() {
@@ -234,6 +377,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             UnregisterEventHotKey(ref)
             popoutHotKeyRef = nil
         }
+        // Unregister quick access hotkeys
+        for ref in quickAccessHotKeyRefs {
+            if let ref = ref {
+                UnregisterEventHotKey(ref)
+            }
+        }
+        quickAccessHotKeyRefs.removeAll()
 
         // Register new hotkeys
         registerHotkeys()
@@ -282,6 +432,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             AppLogger.hotkeys.info("Global hotkey \(popoutShortcut.displayString, privacy: .public) registered for popout")
         } else {
             AppLogger.hotkeys.error("Failed to register popout hotkey: \(popoutStatus)")
+        }
+
+        // Register quick access hotkeys (⌥1 through ⌥5) - IDs 3-7
+        if settings.quickAccessShortcutsEnabled {
+            let numberKeyCodes: [UInt32] = [0x12, 0x13, 0x14, 0x15, 0x17] // 1, 2, 3, 4, 5
+
+            for (index, keyCode) in numberKeyCodes.enumerated() {
+                let quickAccessID = EventHotKeyID(signature: OSType(0x434C4950), id: UInt32(index + 3))
+
+                var quickAccessRef: EventHotKeyRef?
+                let status = RegisterEventHotKey(
+                    keyCode,
+                    UInt32(optionKey),
+                    quickAccessID,
+                    GetApplicationEventTarget(),
+                    0,
+                    &quickAccessRef
+                )
+
+                if status == noErr {
+                    quickAccessHotKeyRefs.append(quickAccessRef)
+                    AppLogger.hotkeys.info("Quick access hotkey ⌥\(index + 1) registered")
+                } else {
+                    quickAccessHotKeyRefs.append(nil)
+                    AppLogger.hotkeys.error("Failed to register quick access hotkey ⌥\(index + 1): \(status)")
+                }
+            }
         }
     }
 
@@ -352,6 +529,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func togglePopover() {
+        let settings = AppSettings.shared
+
+        // Check if using sliding panel mode (new default)
+        if settings.panelModeSetting == .slidingPanel {
+            ensureSlidingPanelController()
+            slidingPanelController?.togglePanel()
+            return
+        }
+
+        // Classic popover mode
         if let button = statusItem.button {
             if popover.isShown {
                 popover.performClose(nil)
@@ -367,6 +554,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // Make sure the popover window becomes key
                 popover.contentViewController?.view.window?.makeKey()
             }
+        }
+    }
+
+    private func ensureSlidingPanelController() {
+        if slidingPanelController == nil {
+            slidingPanelController = SlidingPanelWindowController.createShared(
+                clipboardService: clipboardService,
+                modelContainer: modelContainer
+            )
         }
     }
 
@@ -415,5 +611,8 @@ extension Notification.Name {
     static let toggleClipboardPopover = Notification.Name("toggleClipboardPopover")
     static let togglePopoutBoard = Notification.Name("togglePopoutBoard")
     static let openPopoutBoard = Notification.Name("openPopoutBoard")
+    static let didCopyItem = Notification.Name("didCopyItem")
+    static let dismissClipboardUI = Notification.Name("dismissClipboardUI")
+    static let quickAccessPaste = Notification.Name("quickAccessPaste")
 }
 

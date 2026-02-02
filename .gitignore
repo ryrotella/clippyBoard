@@ -69,3 +69,5 @@ credentials.*
 *.zip
 *.tar.gz
 *.rar
+
+#Markdown docs

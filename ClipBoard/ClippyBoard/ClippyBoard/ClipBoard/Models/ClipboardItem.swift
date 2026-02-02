@@ -1,6 +1,8 @@
 import Foundation
 import SwiftData
 import AppKit
+import UniformTypeIdentifiers
+import SwiftUI
 
 @Model
 final class ClipboardItem {
@@ -108,5 +110,83 @@ enum ContentType: String, CaseIterable {
         case .file: return "orange"
         case .url: return "blue"
         }
+    }
+}
+
+// MARK: - Drag and Drop Support
+
+extension ClipboardItem: Transferable {
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(exportedContentType: .data) { item in
+            item.content
+        }
+    }
+}
+
+/// Provides drag data for ClipboardItem
+struct ClipboardItemDragData: Transferable {
+    let item: ClipboardItem
+
+    static var transferRepresentation: some TransferRepresentation {
+        // Text content
+        DataRepresentation(exportedContentType: .utf8PlainText) { dragData in
+            if let text = dragData.item.textContent {
+                return text.data(using: .utf8) ?? Data()
+            }
+            return Data()
+        }
+        .exportingCondition { dragData in
+            dragData.item.contentTypeEnum == .text || dragData.item.contentTypeEnum == .url
+        }
+
+        // Image content
+        DataRepresentation(exportedContentType: .png) { dragData in
+            dragData.item.content
+        }
+        .exportingCondition { dragData in
+            dragData.item.contentTypeEnum == .image
+        }
+
+        // File URL content
+        DataRepresentation(exportedContentType: .fileURL) { dragData in
+            if let path = dragData.item.firstFilePath,
+               let url = URL(string: "file://\(path)") {
+                return url.absoluteString.data(using: .utf8) ?? Data()
+            }
+            return Data()
+        }
+        .exportingCondition { dragData in
+            dragData.item.contentTypeEnum == .file
+        }
+    }
+}
+
+/// NSItemProvider support for AppKit drag and drop
+extension ClipboardItem {
+    func makeItemProvider() -> NSItemProvider {
+        let provider = NSItemProvider()
+
+        switch contentTypeEnum {
+        case .text, .url:
+            if let text = textContent {
+                provider.registerObject(text as NSString, visibility: .all)
+            }
+
+        case .image:
+            if let nsImage = NSImage(data: content) {
+                provider.registerObject(nsImage, visibility: .all)
+            }
+
+        case .file:
+            if let pathsString = String(data: content, encoding: .utf8) {
+                let paths = pathsString.components(separatedBy: "\n")
+                for path in paths {
+                    let url = URL(fileURLWithPath: path)
+                    provider.registerObject(url as NSURL, visibility: .all)
+                }
+            }
+        }
+
+        return provider
     }
 }

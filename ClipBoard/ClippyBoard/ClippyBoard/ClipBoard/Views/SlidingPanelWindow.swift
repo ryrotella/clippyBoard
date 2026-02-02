@@ -1,0 +1,398 @@
+import SwiftUI
+import AppKit
+import SwiftData
+
+// MARK: - Sliding Panel Window Controller
+
+@MainActor
+class SlidingPanelWindowController: NSObject, ObservableObject {
+    static var shared: SlidingPanelWindowController?
+
+    private var panel: NSPanel?
+    private var clipboardService: ClipboardService
+    private var modelContainer: ModelContainer
+    private var isDetached = false
+    private var dragStartLocation: NSPoint?
+
+    @Published var isVisible = false
+
+    private init(clipboardService: ClipboardService, modelContainer: ModelContainer) {
+        self.clipboardService = clipboardService
+        self.modelContainer = modelContainer
+        super.init()
+        setupPanel()
+        setupNotifications()
+    }
+
+    static func createShared(clipboardService: ClipboardService, modelContainer: ModelContainer) -> SlidingPanelWindowController {
+        if shared == nil {
+            shared = SlidingPanelWindowController(clipboardService: clipboardService, modelContainer: modelContainer)
+        }
+        return shared!
+    }
+
+    private func setupPanel() {
+        let settings = AppSettings.shared
+        let panelSize = calculatePanelSize()
+
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: panelSize.width, height: panelSize.height),
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+
+        panel?.isFloatingPanel = true
+        panel?.level = .floating
+        panel?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel?.isOpaque = false
+        panel?.backgroundColor = .clear
+        panel?.hasShadow = true
+        panel?.isMovableByWindowBackground = false
+        panel?.animationBehavior = .utilityWindow
+
+        let contentView = SlidingPanelContentView(
+            onDragStart: { [weak self] location in
+                self?.dragStartLocation = location
+            },
+            onDragChanged: { [weak self] location in
+                self?.handleDrag(to: location)
+            },
+            onDragEnded: { [weak self] location in
+                self?.handleDragEnd(at: location)
+            },
+            onClose: { [weak self] in
+                self?.hidePanel()
+            }
+        )
+        .environmentObject(clipboardService)
+        .modelContainer(modelContainer)
+
+        panel?.contentView = NSHostingView(rootView: contentView)
+    }
+
+    private func setupNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDismissNotification),
+            name: .dismissClipboardUI,
+            object: nil
+        )
+    }
+
+    @objc private func handleDismissNotification() {
+        hidePanel()
+    }
+
+    private func calculatePanelSize() -> NSSize {
+        let settings = AppSettings.shared
+        let edge = settings.panelEdgeSetting
+
+        switch edge {
+        case .left, .right:
+            return NSSize(width: settings.slidingPanelWidth, height: NSScreen.main?.frame.height ?? 800)
+        case .top, .bottom:
+            return NSSize(width: NSScreen.main?.frame.width ?? 1200, height: settings.slidingPanelHeight)
+        }
+    }
+
+    private func calculateOffscreenFrame() -> NSRect {
+        guard let screen = NSScreen.main else { return .zero }
+        let settings = AppSettings.shared
+        let panelSize = calculatePanelSize()
+
+        switch settings.panelEdgeSetting {
+        case .left:
+            return NSRect(x: -panelSize.width, y: 0, width: panelSize.width, height: screen.frame.height)
+        case .right:
+            return NSRect(x: screen.frame.width, y: 0, width: panelSize.width, height: screen.frame.height)
+        case .top:
+            return NSRect(x: 0, y: screen.frame.height, width: screen.frame.width, height: panelSize.height)
+        case .bottom:
+            return NSRect(x: 0, y: -panelSize.height, width: screen.frame.width, height: panelSize.height)
+        }
+    }
+
+    private func calculateOnscreenFrame() -> NSRect {
+        guard let screen = NSScreen.main else { return .zero }
+        let settings = AppSettings.shared
+        let panelSize = calculatePanelSize()
+
+        switch settings.panelEdgeSetting {
+        case .left:
+            return NSRect(x: 0, y: 0, width: panelSize.width, height: screen.frame.height)
+        case .right:
+            return NSRect(x: screen.frame.width - panelSize.width, y: 0, width: panelSize.width, height: screen.frame.height)
+        case .top:
+            return NSRect(x: 0, y: screen.frame.height - panelSize.height, width: screen.frame.width, height: panelSize.height)
+        case .bottom:
+            return NSRect(x: 0, y: 0, width: screen.frame.width, height: panelSize.height)
+        }
+    }
+
+    // MARK: - Show/Hide
+
+    func showPanel() {
+        guard !isVisible else { return }
+        clipboardService.refreshItems()
+
+        if isDetached {
+            // Show as floating window
+            panel?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            isVisible = true
+            return
+        }
+
+        // Slide in from edge
+        let startFrame = calculateOffscreenFrame()
+        let endFrame = calculateOnscreenFrame()
+
+        panel?.setFrame(startFrame, display: false)
+        panel?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel?.animator().setFrame(endFrame, display: true)
+        }
+
+        isVisible = true
+    }
+
+    func hidePanel() {
+        guard isVisible else { return }
+
+        if isDetached {
+            panel?.orderOut(nil)
+            isVisible = false
+            return
+        }
+
+        // Slide out to edge
+        let endFrame = calculateOffscreenFrame()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel?.animator().setFrame(endFrame, display: true)
+        } completionHandler: { [weak self] in
+            self?.panel?.orderOut(nil)
+            self?.isVisible = false
+        }
+    }
+
+    func togglePanel() {
+        if isVisible {
+            hidePanel()
+        } else {
+            showPanel()
+        }
+    }
+
+    // MARK: - Drag to Detach
+
+    private func handleDrag(to location: NSPoint) {
+        guard let panel = panel, !isDetached else { return }
+
+        let settings = AppSettings.shared
+        let threshold: CGFloat = 100
+
+        // Check if dragged far enough from edge to detach
+        switch settings.panelEdgeSetting {
+        case .left:
+            if location.x > threshold {
+                detachPanel(at: location)
+            }
+        case .right:
+            if let screen = NSScreen.main, location.x < screen.frame.width - threshold {
+                detachPanel(at: location)
+            }
+        case .top:
+            if let screen = NSScreen.main, location.y < screen.frame.height - threshold {
+                detachPanel(at: location)
+            }
+        case .bottom:
+            if location.y > threshold {
+                detachPanel(at: location)
+            }
+        }
+    }
+
+    private func handleDragEnd(at location: NSPoint) {
+        if isDetached {
+            // Save floating window position
+            if let frame = panel?.frame {
+                AppSettings.shared.popoutWindowX = Double(frame.origin.x)
+                AppSettings.shared.popoutWindowY = Double(frame.origin.y)
+            }
+        }
+        dragStartLocation = nil
+    }
+
+    private func detachPanel(at location: NSPoint) {
+        guard !isDetached else { return }
+        isDetached = true
+
+        // Convert to floating window style
+        panel?.styleMask = [.titled, .closable, .resizable, .miniaturizable]
+        panel?.isMovableByWindowBackground = true
+        panel?.level = .floating
+
+        // Set new frame centered on drag location
+        let settings = AppSettings.shared
+        let width = settings.slidingPanelWidth
+        let height = min(settings.slidingPanelHeight, 600)
+
+        let newFrame = NSRect(
+            x: location.x - width / 2,
+            y: location.y - height / 2,
+            width: width,
+            height: height
+        )
+
+        panel?.setFrame(newFrame, display: true)
+    }
+
+    func reattachPanel() {
+        isDetached = false
+        setupPanel()
+    }
+}
+
+// MARK: - Sliding Panel Content View
+
+struct SlidingPanelContentView: View {
+    @EnvironmentObject private var clipboardService: ClipboardService
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var toastManager = ToastManager.shared
+
+    @State private var searchText = ""
+    @State private var selectedType: ContentType?
+    @State private var previewingImage: ClipboardItem?
+
+    var onDragStart: ((NSPoint) -> Void)?
+    var onDragChanged: ((NSPoint) -> Void)?
+    var onDragEnded: ((NSPoint) -> Void)?
+    var onClose: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Drag handle / header
+            panelHeader
+
+            Divider()
+
+            // Content
+            ClipboardContentView(
+                searchText: $searchText,
+                selectedType: $selectedType,
+                previewingImage: $previewingImage
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(panelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: panelCornerRadius)
+                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 0)
+        .opacity(settings.windowOpacity)
+        .preferredColorScheme(settings.appearanceMode.colorScheme)
+        .toast(
+            isShowing: $toastManager.isShowingCopyToast,
+            message: "Copied!",
+            icon: "checkmark.circle.fill",
+            playSound: settings.copyFeedbackSound
+        )
+    }
+
+    private var panelCornerRadius: CGFloat {
+        switch settings.panelEdgeSetting {
+        case .left: return 0
+        case .right: return 0
+        case .top: return 0
+        case .bottom: return 0
+        }
+    }
+
+    private var panelBackground: some ShapeStyle {
+        .ultraThinMaterial
+    }
+
+    // MARK: - Header
+
+    private var panelHeader: some View {
+        HStack {
+            // Drag handle indicator
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.secondary.opacity(0.3))
+                .frame(width: 40, height: 4)
+                .padding(.vertical, 4)
+
+            Spacer()
+
+            Image(systemName: "clipboard")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+
+            Text("ClipBoard")
+                .font(.headline)
+
+            Spacer()
+
+            // Settings button
+            Button(action: {
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            }) {
+                Image(systemName: "gear")
+                    .font(.body)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+
+            // Close button
+            Button(action: { onClose?() }) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.body)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .padding(.leading, 4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    if let window = NSApp.keyWindow {
+                        let screenLocation = NSPoint(
+                            x: window.frame.origin.x + value.location.x,
+                            y: window.frame.origin.y + value.location.y
+                        )
+                        onDragChanged?(screenLocation)
+                    }
+                }
+                .onEnded { value in
+                    if let window = NSApp.keyWindow {
+                        let screenLocation = NSPoint(
+                            x: window.frame.origin.x + value.location.x,
+                            y: window.frame.origin.y + value.location.y
+                        )
+                        onDragEnded?(screenLocation)
+                    }
+                }
+        )
+    }
+}
+
+// MARK: - Preview
+
+#Preview {
+    SlidingPanelContentView()
+        .frame(width: 380, height: 600)
+        .environmentObject(ClipboardService())
+}

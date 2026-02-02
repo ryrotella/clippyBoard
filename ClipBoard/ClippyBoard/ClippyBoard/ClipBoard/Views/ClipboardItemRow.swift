@@ -4,6 +4,7 @@ import SwiftData
 struct ClipboardItemRow: View {
     let item: ClipboardItem
     var isRevealed: Bool = true // For sensitive items: whether content is revealed
+    var onCopyTapped: (() -> Void)? = nil // Callback for copy button tap
 
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var authService = AuthenticationService.shared
@@ -33,9 +34,25 @@ struct ClipboardItemRow: View {
         return ImageCache.shared.image(for: item.content, key: item.id.uuidString)
     }
 
-    private var thumbnailSize: CGFloat {
-        // Show larger thumbnail for images and image files
-        (isImage || isImageFile) ? settings.thumbnailSizeSetting.largeSize : settings.thumbnailSizeSetting.smallSize
+    /// Whether this item has visual content (image or image file)
+    private var hasVisualContent: Bool {
+        isImage || isImageFile
+    }
+
+    /// Image height for visual content - adapts to actual image aspect ratio
+    private var imageDisplayHeight: CGFloat {
+        if let nsImage = cachedImage {
+            let aspectRatio = nsImage.size.width / nsImage.size.height
+            // Constrain height based on aspect ratio, min 80, max 200
+            let calculatedHeight = 320 / aspectRatio
+            return min(max(calculatedHeight, 80), 200)
+        }
+        if let thumbnail = item.thumbnailImage {
+            let aspectRatio = thumbnail.size.width / thumbnail.size.height
+            let calculatedHeight = 320 / aspectRatio
+            return min(max(calculatedHeight, 80), 200)
+        }
+        return 120
     }
 
     private var rowPadding: CGFloat {
@@ -52,102 +69,221 @@ struct ClipboardItemRow: View {
     }
 
     var body: some View {
-        HStack(spacing: contentSpacing) {
-            // Content type icon or thumbnail
-            contentPreview
-                .frame(width: thumbnailSize, height: thumbnailSize)
+        VStack(alignment: .leading, spacing: 8) {
+            // Main content area - the hero
+            mainContentView
 
-            // Main content
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    // Content type badge
-                    if settings.showTypeBadges {
-                        Text(item.contentTypeEnum.displayName)
-                            .font(.system(size: badgeFont, weight: .medium))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(badgeColor.opacity(0.15))
-                            .foregroundStyle(badgeColor)
-                            .cornerRadius(4)
-                    }
+            // Metadata row: source, time, indicators, copy button
+            metadataRow
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, rowPadding + 2)
+        .background(rowBackground)
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(borderColor, lineWidth: settings.isHighContrast ? 1 : 0)
+        )
+        .contentShape(Rectangle())
+        .draggable(ClipboardItemDragData(item: item)) {
+            ClipboardItemDragPreview(item: item)
+        }
+    }
 
-                    // Image dimensions
-                    if isImage, let nsImage = cachedImage {
-                        Text("\(Int(nsImage.size.width))×\(Int(nsImage.size.height))")
-                            .font(.system(size: badgeFont))
-                            .foregroundStyle(.secondary)
-                    }
+    // MARK: - Main Content View (Hero)
 
-                    // Pin indicator
-                    if item.isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(settings.accentColor ?? .orange)
-                    }
+    @ViewBuilder
+    private var mainContentView: some View {
+        if shouldHideContent {
+            // Sensitive content placeholder
+            HStack(spacing: 8) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 20))
+                Text("Sensitive content - tap to reveal")
+                    .font(.system(size: bodyFont))
+                    .italic()
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 12)
+        } else if isImage {
+            // Image content - full width, prominent
+            imageContentView
+        } else if isImageFile {
+            // Image file - full width thumbnail
+            imageFileContentView
+        } else {
+            // Text/URL/File content - text is the hero
+            textContentView
+        }
+    }
 
-                    // Sensitive indicator
-                    if item.isSensitive {
-                        Image(systemName: shouldHideContent ? "lock.fill" : "lock.open.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(shouldHideContent ? .red : .green)
-                    }
+    @ViewBuilder
+    private var imageContentView: some View {
+        if let nsImage = cachedImage {
+            Image(nsImage: nsImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .frame(height: imageDisplayHeight)
+                .cornerRadius(8)
+                .clipped()
+                .accessibilityHidden(true)
+        } else {
+            // Placeholder for loading image
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.8))
+                .frame(maxWidth: .infinity)
+                .frame(height: 100)
+                .overlay(
+                    Image(systemName: "photo")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tertiary)
+                )
+                .accessibilityHidden(true)
+        }
+    }
 
-                    Spacer()
+    @ViewBuilder
+    private var imageFileContentView: some View {
+        if let thumbnail = item.thumbnailImage {
+            ZStack(alignment: .bottomTrailing) {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: imageDisplayHeight)
+                    .cornerRadius(8)
+                    .clipped()
 
-                    // Timestamp
-                    if settings.showTimestamps {
-                        Text(item.relativeTimestamp)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
+                // File badge
+                Image(systemName: "doc.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white)
+                    .padding(4)
+                    .background(Color.orange)
+                    .cornerRadius(6)
+                    .padding(6)
+            }
+            .accessibilityHidden(true)
+        }
+    }
 
-                // Content preview (hide for images)
-                if !isImage {
-                    if shouldHideContent {
-                        // Show placeholder for sensitive hidden content
-                        HStack(spacing: 4) {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: bodyFont * 0.9))
-                            Text("Sensitive content - tap to reveal")
-                                .font(.system(size: bodyFont * 0.9))
-                                .italic()
-                        }
+    @ViewBuilder
+    private var textContentView: some View {
+        HStack(alignment: .top, spacing: 10) {
+            // Small type indicator icon
+            typeIcon
+                .frame(width: 28, height: 28)
+
+            // Text content - the main focus
+            Text(item.displayText.isEmpty ? "(No text)" : item.displayText)
+                .font(.system(size: bodyFont * 1.1))
+                .foregroundStyle(.primary)
+                .lineLimit(settings.maxPreviewLines + 1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var typeIcon: some View {
+        switch item.contentTypeEnum {
+        case .text:
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.8))
+                .overlay(
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 14))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    } else {
-                        Text(item.displayText.isEmpty ? "(No text)" : item.displayText)
-                            .font(.system(size: bodyFont))
-                            .foregroundStyle(.primary)
-                            .lineLimit(settings.maxPreviewLines)
-                            .truncationMode(.tail)
-                    }
-                }
+                )
+        case .url:
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.blue.opacity(0.15))
+                .overlay(
+                    Image(systemName: "link")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.blue)
+                )
+        case .file:
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.orange.opacity(0.15))
+                .overlay(
+                    Image(systemName: "doc")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.orange)
+                )
+        case .image:
+            EmptyView()
+        }
+    }
 
-                // Source app
-                if settings.showSourceAppIcon, let appName = item.sourceAppName {
-                    HStack(spacing: 4) {
-                        if let icon = item.sourceAppIcon {
-                            Image(nsImage: icon)
-                                .resizable()
-                                .frame(width: 12, height: 12)
-                        }
+    // MARK: - Metadata Row
+
+    private var metadataRow: some View {
+        HStack(spacing: 8) {
+            // Source app
+            if settings.showSourceAppIcon, let appName = item.sourceAppName {
+                HStack(spacing: 4) {
+                    if let icon = item.sourceAppIcon {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 14, height: 14)
+                    }
+                    if !settings.simplifiedDisplay {
                         Text(appName)
-                            .font(.caption2)
+                            .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
                 }
             }
+
+            // Separator dot if we have both source and timestamp
+            if settings.showSourceAppIcon && item.sourceAppName != nil && settings.showTimestamps {
+                Text("·")
+                    .font(.caption)
+                    .foregroundStyle(.quaternary)
+            }
+
+            // Timestamp
+            if settings.showTimestamps {
+                Text(item.relativeTimestamp)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            // Status indicators
+            if item.isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(settings.accentColor ?? .orange)
+            }
+
+            if item.isSensitive {
+                Image(systemName: shouldHideContent ? "lock.fill" : "lock.open.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(shouldHideContent ? .red : .green)
+            }
+
+            Spacer()
+
+            // Copy button
+            if settings.showCopyButton {
+                Button(action: {
+                    onCopyTapped?()
+                }) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .padding(6)
+                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.8))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                .help("Copy to clipboard")
+                .accessibilityLabel("Copy")
+            }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, rowPadding)
-        .background(rowBackground)
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(borderColor, lineWidth: settings.isHighContrast ? 1 : 0)
-        )
-        .contentShape(Rectangle())
     }
 
     private var rowBackground: Color {
@@ -163,100 +299,12 @@ struct ClipboardItemRow: View {
         }
         return .clear
     }
-
-    // MARK: - Content Preview
-
-    @ViewBuilder
-    private var contentPreview: some View {
-        switch item.contentTypeEnum {
-        case .text:
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay(
-                    Image(systemName: "doc.text")
-                        .font(.system(size: iconSize))
-                        .foregroundStyle(.secondary)
-                )
-                .accessibilityHidden(true)
-
-        case .image:
-            if let nsImage = cachedImage {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: thumbnailSize, height: thumbnailSize)
-                    .cornerRadius(6)
-                    .clipped()
-                    .accessibilityHidden(true)
-            } else {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-                    .overlay(
-                        Image(systemName: "photo")
-                            .font(.system(size: largeIconSize))
-                            .foregroundStyle(.secondary)
-                    )
-                    .accessibilityHidden(true)
-            }
-
-        case .url:
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.blue.opacity(0.1))
-                .overlay(
-                    Image(systemName: "link")
-                        .font(.system(size: iconSize))
-                        .foregroundStyle(.blue)
-                )
-                .accessibilityHidden(true)
-
-        case .file:
-            // Show thumbnail for image files, otherwise show file icon
-            if let thumbnail = item.thumbnailImage {
-                Image(nsImage: thumbnail)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: thumbnailSize, height: thumbnailSize)
-                    .cornerRadius(6)
-                    .clipped()
-                    .overlay(
-                        // Small file badge in corner to indicate it's a file
-                        Image(systemName: "doc.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white)
-                            .padding(3)
-                            .background(Color.orange)
-                            .cornerRadius(4)
-                            .padding(4),
-                        alignment: .bottomTrailing
-                    )
-                    .accessibilityHidden(true)
-            } else {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.orange.opacity(0.1))
-                    .overlay(
-                        Image(systemName: "doc")
-                            .font(.system(size: iconSize))
-                            .foregroundStyle(.orange)
-                    )
-                    .accessibilityHidden(true)
-            }
-        }
-    }
-
-    private var badgeColor: Color {
-        switch item.contentTypeEnum {
-        case .text: return .gray
-        case .image: return .purple
-        case .file: return .orange
-        case .url: return .blue
-        }
-    }
 }
 
 // MARK: - Preview
 
 #Preview {
-    VStack {
+    VStack(spacing: 12) {
         ClipboardItemRow(item: ClipboardItem(
             content: "Hello, World!".data(using: .utf8)!,
             textContent: "Hello, World! This is a sample clipboard item that might be a bit longer.",
@@ -279,5 +327,5 @@ struct ClipboardItemRow: View {
         ))
     }
     .padding()
-    .frame(width: 340)
+    .frame(width: 380)
 }

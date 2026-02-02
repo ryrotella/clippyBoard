@@ -54,18 +54,45 @@ enum RowDensity: String, CaseIterable {
 
     var verticalPadding: CGFloat {
         switch self {
-        case .compact: return 4
-        case .comfortable: return 8
-        case .spacious: return 12
+        case .compact: return 6
+        case .comfortable: return 10
+        case .spacious: return 14
         }
     }
 
     var spacing: CGFloat {
         switch self {
-        case .compact: return 4
-        case .comfortable: return 10
-        case .spacious: return 14
+        case .compact: return 8
+        case .comfortable: return 12
+        case .spacious: return 16
         }
+    }
+}
+
+// MARK: - Panel Mode
+
+enum PanelMode: String, CaseIterable {
+    case slidingPanel = "slidingPanel"
+    case popover = "popover"
+
+    var displayName: String {
+        switch self {
+        case .slidingPanel: return "Sliding Panel"
+        case .popover: return "Classic Popover"
+        }
+    }
+}
+
+// MARK: - Panel Edge
+
+enum PanelEdge: String, CaseIterable {
+    case left = "left"
+    case right = "right"
+    case top = "top"
+    case bottom = "bottom"
+
+    var displayName: String {
+        rawValue.capitalized
     }
 }
 
@@ -82,17 +109,17 @@ enum ThumbnailSize: String, CaseIterable {
 
     var smallSize: CGFloat {
         switch self {
-        case .small: return 28
-        case .medium: return 36
-        case .large: return 48
+        case .small: return 40
+        case .medium: return 48
+        case .large: return 60
         }
     }
 
     var largeSize: CGFloat {
         switch self {
-        case .small: return 48
-        case .medium: return 60
-        case .large: return 80
+        case .small: return 80
+        case .medium: return 100
+        case .large: return 140
         }
     }
 }
@@ -223,6 +250,59 @@ class AppSettings: ObservableObject {
     /// Max preview lines (1-4)
     @AppStorage("maxPreviewLines") var maxPreviewLines: Int = 2
 
+    // MARK: - Display Mode Settings
+
+    /// Simplified display mode (hides type badges, shows minimal info)
+    @AppStorage("simplifiedDisplay") var simplifiedDisplay: Bool = false
+
+    /// Show explicit copy button on each row
+    @AppStorage("showCopyButton") var showCopyButton: Bool = true
+
+    // MARK: - Copy Feedback Settings
+
+    /// Show toast notification when copying
+    @AppStorage("copyFeedbackToast") var copyFeedbackToast: Bool = true
+
+    /// Play sound when copying
+    @AppStorage("copyFeedbackSound") var copyFeedbackSound: Bool = false
+
+    // MARK: - Click-to-Paste Settings
+
+    /// Enable click-to-paste (requires Accessibility permission)
+    @AppStorage("clickToPaste") var clickToPaste: Bool = true
+
+    // MARK: - Panel Mode Settings
+
+    /// Panel mode: slidingPanel (default) or popover
+    @AppStorage("panelMode") var panelMode: String = PanelMode.slidingPanel.rawValue
+
+    /// Panel edge for sliding panel (left, right, top, bottom)
+    @AppStorage("panelEdge") var panelEdge: String = PanelEdge.left.rawValue
+
+    /// Sliding panel width
+    @AppStorage("slidingPanelWidth") var slidingPanelWidth: Double = 380
+
+    /// Sliding panel height (for top/bottom edges)
+    @AppStorage("slidingPanelHeight") var slidingPanelHeight: Double = 520
+
+    // MARK: - Quick Access Shortcuts
+
+    /// Quick access shortcuts data (⌥1 through ⌥5)
+    @AppStorage("quickAccessShortcutsEnabled") var quickAccessShortcutsEnabled: Bool = true
+
+    // MARK: - API Settings
+
+    /// Enable local API server
+    @AppStorage("apiEnabled") var apiEnabled: Bool = false
+
+    /// API server port
+    @AppStorage("apiPort") var apiPort: Int = 19847
+
+    // MARK: - Onboarding
+
+    /// Whether onboarding has been completed
+    @AppStorage("onboardingCompleted") var onboardingCompleted: Bool = false
+
     // MARK: - Appearance Computed Properties
 
     var rowDensity: RowDensity {
@@ -258,6 +338,16 @@ class AppSettings: ObservableObject {
         set {
             separatorColorHex = newValue?.toHex() ?? ""
         }
+    }
+
+    var panelModeSetting: PanelMode {
+        get { PanelMode(rawValue: panelMode) ?? .slidingPanel }
+        set { panelMode = newValue.rawValue }
+    }
+
+    var panelEdgeSetting: PanelEdge {
+        get { PanelEdge(rawValue: panelEdge) ?? .left }
+        set { panelEdge = newValue.rawValue }
     }
 
     /// Returns the effective separator color based on appearance mode
@@ -305,6 +395,12 @@ class AppSettings: ObservableObject {
         showTimestamps = true
         showTypeBadges = true
         maxPreviewLines = Self.defaultMaxPreviewLines
+        simplifiedDisplay = false
+        showCopyButton = true
+        copyFeedbackToast = true
+        copyFeedbackSound = false
+        panelMode = PanelMode.slidingPanel.rawValue
+        panelEdge = PanelEdge.left.rawValue
     }
 
     func resetShortcutsToDefaults() {

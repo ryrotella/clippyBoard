@@ -70,4 +70,5 @@ credentials.*
 *.tar.gz
 *.rar
 
-#Markdown docs
+#homebrew stuff
+homebrew-cask-template/

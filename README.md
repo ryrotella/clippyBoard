@@ -26,17 +26,13 @@ A native macOS clipboard history application built with Swift and SwiftUI.
 
 ```
 ClipBoardApp/
-├── docs/                    # Documentation
-│   ├── implementation-plan.md
-│   ├── design-decisions.md
-│   └── session-notes/
 ├── ClipBoard/               # Main app source
 │   ├── App/                 # App entry point
 │   ├── Views/               # SwiftUI views
 │   ├── Models/              # Data models
 │   ├── Services/            # Core services
 │   └── Utilities/           # Helper functions
-└── ClipBoardTests/          # Unit tests
+
 ```
 
 ## License

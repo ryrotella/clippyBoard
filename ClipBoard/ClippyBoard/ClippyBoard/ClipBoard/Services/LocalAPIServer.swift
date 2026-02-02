@@ -1,5 +1,5 @@
 import Foundation
-import Network
+@preconcurrency import Network
 import SwiftData
 import AppKit
 import os
@@ -17,6 +17,27 @@ class LocalAPIServer: ObservableObject {
     private var modelContainer: ModelContainer?
     private var apiToken: String?
 
+    // MARK: - Security Configuration
+
+    /// Maximum request size (1MB)
+    private let maxRequestSize = 1024 * 1024
+
+    /// Connection timeout in seconds
+    private let connectionTimeout: TimeInterval = 30
+
+    /// Rate limiting: max connections per minute per IP
+    private let maxConnectionsPerMinute = 60
+    private var connectionAttempts: [String: [Date]] = [:]
+
+    /// Active timeout tasks keyed by connection object identifier
+    private var connectionTimeouts: [ObjectIdentifier: DispatchWorkItem] = [:]
+
+    /// Cached date formatter for performance
+    private static let iso8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        return formatter
+    }()
+
     private init() {
         loadOrGenerateToken()
     }
@@ -28,26 +49,141 @@ class LocalAPIServer: ObservableObject {
     // MARK: - Token Management
 
     private func loadOrGenerateToken() {
-        // Try to load from Keychain
         if let existingToken = KeychainHelper.load(key: "ClipBoardAPIToken") {
             apiToken = existingToken
         } else {
-            // Generate new token
             let newToken = UUID().uuidString
-            KeychainHelper.save(key: "ClipBoardAPIToken", value: newToken)
-            apiToken = newToken
+            if KeychainHelper.save(key: "ClipBoardAPIToken", value: newToken) {
+                apiToken = newToken
+            } else {
+                AppLogger.clipboard.error("Failed to save API token to Keychain")
+                apiToken = newToken
+            }
         }
     }
 
     func regenerateToken() {
         let newToken = UUID().uuidString
-        KeychainHelper.save(key: "ClipBoardAPIToken", value: newToken)
-        apiToken = newToken
-        AppLogger.clipboard.info("API token regenerated")
+        if KeychainHelper.save(key: "ClipBoardAPIToken", value: newToken) {
+            objectWillChange.send()
+            apiToken = newToken
+            AppLogger.clipboard.info("API token regenerated")
+        } else {
+            AppLogger.clipboard.error("Failed to save regenerated API token")
+        }
     }
 
     var currentToken: String? {
         apiToken
+    }
+
+    // MARK: - Security Helpers
+
+    /// Constant-time string comparison to prevent timing attacks
+    private func secureCompare(_ a: String?, _ b: String?) -> Bool {
+        guard let aData = a?.data(using: .utf8),
+              let bData = b?.data(using: .utf8) else {
+            return false
+        }
+
+        guard aData.count == bData.count else {
+            return false
+        }
+
+        var result: UInt8 = 0
+        for (aByte, bByte) in zip(aData, bData) {
+            result |= aByte ^ bByte
+        }
+        return result == 0
+    }
+
+    /// Check if connection should be allowed based on rate limiting
+    private func shouldAllowConnection(from endpoint: NWEndpoint?) -> Bool {
+        guard let endpoint = endpoint else { return true }
+
+        let endpointKey = "\(endpoint)"
+        let now = Date()
+        let oneMinuteAgo = now.addingTimeInterval(-60)
+
+        // Clean up old entries
+        connectionAttempts[endpointKey] = connectionAttempts[endpointKey]?.filter { $0 > oneMinuteAgo } ?? []
+
+        // Check rate limit
+        let recentAttempts = connectionAttempts[endpointKey]?.count ?? 0
+        if recentAttempts >= maxConnectionsPerMinute {
+            AppLogger.clipboard.warning("Rate limit exceeded for endpoint: \(endpointKey)")
+            return false
+        }
+
+        // Record this attempt
+        connectionAttempts[endpointKey, default: []].append(now)
+        return true
+    }
+
+    /// Detect MIME type from image data magic bytes
+    private func mimeTypeForImageData(_ data: Data) -> String {
+        guard data.count >= 8 else { return "application/octet-stream" }
+
+        let bytes = Array(data.prefix(8))
+
+        // PNG: 89 50 4E 47 0D 0A 1A 0A
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+            return "image/png"
+        }
+        // JPEG: FF D8 FF
+        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) {
+            return "image/jpeg"
+        }
+        // GIF: 47 49 46 38
+        if bytes.starts(with: [0x47, 0x49, 0x46, 0x38]) {
+            return "image/gif"
+        }
+        // WebP: 52 49 46 46 ... 57 45 42 50
+        if bytes.starts(with: [0x52, 0x49, 0x46, 0x46]) && data.count >= 12 {
+            let webpBytes = Array(data[8..<12])
+            if webpBytes == [0x57, 0x45, 0x42, 0x50] {
+                return "image/webp"
+            }
+        }
+        // TIFF: 49 49 2A 00 or 4D 4D 00 2A
+        if bytes.starts(with: [0x49, 0x49, 0x2A, 0x00]) || bytes.starts(with: [0x4D, 0x4D, 0x00, 0x2A]) {
+            return "image/tiff"
+        }
+        // BMP: 42 4D
+        if bytes.starts(with: [0x42, 0x4D]) {
+            return "image/bmp"
+        }
+
+        return "image/png" // Default fallback
+    }
+
+    /// Parse query parameters from URL path
+    private func parseQueryParameters(from path: String) -> [String: String] {
+        guard let questionMarkIndex = path.firstIndex(of: "?") else {
+            return [:]
+        }
+
+        let queryString = String(path[path.index(after: questionMarkIndex)...])
+        var params: [String: String] = [:]
+
+        for pair in queryString.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1)
+            if parts.count == 2 {
+                let key = String(parts[0])
+                let value = String(parts[1]).removingPercentEncoding ?? String(parts[1])
+                params[key] = value
+            }
+        }
+
+        return params
+    }
+
+    /// Extract path without query parameters
+    private func pathWithoutQuery(_ path: String) -> String {
+        if let questionMarkIndex = path.firstIndex(of: "?") {
+            return String(path[..<questionMarkIndex])
+        }
+        return path
     }
 
     // MARK: - Server Control
@@ -56,20 +192,28 @@ class LocalAPIServer: ObservableObject {
         guard !isRunning else { return }
         guard AppSettings.shared.apiEnabled else { return }
 
-        port = AppSettings.shared.apiPort
+        self.port = AppSettings.shared.apiPort
+
+        // Validate port range
+        guard self.port > 0 && self.port <= 65535 else {
+            AppLogger.clipboard.error("Invalid port number: \(self.port). Must be between 1 and 65535.")
+            return
+        }
 
         do {
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
 
-            listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: UInt16(port)))
+            // Create listener on the specified port
+            listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: UInt16(self.port)))
 
+            let serverPort = self.port
             listener?.stateUpdateHandler = { [weak self] state in
                 Task { @MainActor in
                     switch state {
                     case .ready:
                         self?.isRunning = true
-                        AppLogger.clipboard.info("API server started on port \(self?.port ?? 0)")
+                        AppLogger.clipboard.info("API server started on localhost:\(serverPort)")
                     case .failed(let error):
                         AppLogger.clipboard.error("API server failed: \(error.localizedDescription)")
                         self?.isRunning = false
@@ -97,19 +241,55 @@ class LocalAPIServer: ObservableObject {
         listener?.cancel()
         listener = nil
         isRunning = false
+        connectionAttempts.removeAll()
+        // Cancel all pending connection timeouts
+        connectionTimeouts.values.forEach { $0.cancel() }
+        connectionTimeouts.removeAll()
         AppLogger.clipboard.info("API server stopped")
     }
 
     // MARK: - Connection Handling
 
     private func handleConnection(_ connection: NWConnection) {
-        connection.stateUpdateHandler = { [weak self] state in
+        // SECURITY: Only allow connections from localhost
+        if case let .hostPort(host, _) = connection.endpoint {
+            let hostString = "\(host)"
+            let isLocalhost = hostString == "127.0.0.1" || hostString == "::1" || hostString.contains("localhost")
+            if !isLocalhost {
+                AppLogger.clipboard.warning("Rejected non-localhost connection from: \(hostString)")
+                connection.cancel()
+                return
+            }
+        }
+
+        // Rate limiting check
+        guard shouldAllowConnection(from: connection.endpoint) else {
+            sendResponse(connection: connection, statusCode: 429, body: ["error": "Too many requests"])
+            return
+        }
+
+        // Connection timeout
+        let connectionId = ObjectIdentifier(connection)
+        let timeoutWork = DispatchWorkItem { [weak self, weak connection] in
+            connection?.cancel()
+            Task { @MainActor in
+                self?.connectionTimeouts.removeValue(forKey: connectionId)
+            }
+        }
+        connectionTimeouts[connectionId] = timeoutWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + connectionTimeout, execute: timeoutWork)
+
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let connection = connection else { return }
             switch state {
             case .ready:
                 Task { @MainActor in
                     self?.receiveRequest(on: connection)
                 }
             case .failed, .cancelled:
+                Task { @MainActor in
+                    self?.cancelTimeout(for: connection)
+                }
                 connection.cancel()
             default:
                 break
@@ -119,20 +299,33 @@ class LocalAPIServer: ObservableObject {
         connection.start(queue: .main)
     }
 
+    private func cancelTimeout(for connection: NWConnection) {
+        let connectionId = ObjectIdentifier(connection)
+        connectionTimeouts[connectionId]?.cancel()
+        connectionTimeouts.removeValue(forKey: connectionId)
+    }
+
     private func receiveRequest(on connection: NWConnection) {
-        // Accumulate all data until we have a complete request
         var accumulatedData = Data()
+        let maxSize = self.maxRequestSize
 
         func receiveChunk() {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
                 if let data = data {
                     accumulatedData.append(data)
+
+                    // SECURITY: Enforce maximum request size
+                    if accumulatedData.count > maxSize {
+                        Task { @MainActor in
+                            self?.cancelTimeout(for: connection)
+                            self?.sendResponse(connection: connection, statusCode: 413, body: ["error": "Request too large"])
+                        }
+                        return
+                    }
                 }
 
-                // Check if we have a complete HTTP request
                 if let requestString = String(data: accumulatedData, encoding: .utf8),
                    requestString.contains("\r\n\r\n") {
-                    // Check Content-Length to see if we need the body
                     if let contentLengthRange = requestString.range(of: "Content-Length: ", options: .caseInsensitive),
                        let endOfLine = requestString[contentLengthRange.upperBound...].firstIndex(of: "\r"),
                        let contentLength = Int(String(requestString[contentLengthRange.upperBound..<endOfLine])),
@@ -141,7 +334,6 @@ class LocalAPIServer: ObservableObject {
                         let headerEndIndex = requestString.distance(from: requestString.startIndex, to: bodyStart.upperBound)
                         let currentBodyLength = accumulatedData.count - headerEndIndex
 
-                        // Need more data for body
                         if currentBodyLength < contentLength && !isComplete && error == nil {
                             Task { @MainActor in
                                 receiveChunk()
@@ -150,21 +342,20 @@ class LocalAPIServer: ObservableObject {
                         }
                     }
 
-                    // Process the complete request
                     Task { @MainActor in
+                        self?.cancelTimeout(for: connection)
                         self?.processRequest(data: accumulatedData, connection: connection)
                     }
                     return
                 }
 
-                // Need more data for headers
                 if !isComplete && error == nil {
                     Task { @MainActor in
                         receiveChunk()
                     }
                 } else {
-                    // Process whatever we have
                     Task { @MainActor in
+                        self?.cancelTimeout(for: connection)
                         self?.processRequest(data: accumulatedData, connection: connection)
                     }
                 }
@@ -180,7 +371,6 @@ class LocalAPIServer: ObservableObject {
             return
         }
 
-        // Parse HTTP request
         let lines = requestString.components(separatedBy: "\r\n")
         guard let requestLine = lines.first else {
             sendResponse(connection: connection, statusCode: 400, body: ["error": "Invalid request"])
@@ -196,7 +386,12 @@ class LocalAPIServer: ObservableObject {
         let method = String(parts[0])
         let path = String(parts[1])
 
-        // Extract Authorization header
+        // Handle CORS preflight
+        if method == "OPTIONS" {
+            sendCorsPreflightResponse(connection: connection)
+            return
+        }
+
         var authToken: String?
         for line in lines {
             if line.lowercased().hasPrefix("authorization:") {
@@ -207,28 +402,27 @@ class LocalAPIServer: ObservableObject {
             }
         }
 
-        // Verify token
-        guard authToken == apiToken else {
+        // SECURITY: Constant-time token comparison to prevent timing attacks
+        guard secureCompare(authToken, apiToken) else {
             sendResponse(connection: connection, statusCode: 401, body: ["error": "Unauthorized"])
             return
         }
 
-        // Extract request body (after blank line)
         var requestBody: Data?
         if let bodyStart = requestString.range(of: "\r\n\r\n") {
             let bodyString = String(requestString[bodyStart.upperBound...])
             requestBody = bodyString.data(using: .utf8)
         }
 
-        // Route request
         Task { @MainActor in
             await self.routeRequest(method: method, path: path, body: requestBody, connection: connection)
         }
     }
 
     private func routeRequest(method: String, path: String, body: Data?, connection: NWConnection) async {
-        // Parse path
-        let pathComponents = path.split(separator: "/").map(String.init)
+        let cleanPath = pathWithoutQuery(path)
+        let pathComponents = cleanPath.split(separator: "/").map(String.init)
+        let queryParams = parseQueryParameters(from: path)
 
         switch method {
         case "GET":
@@ -241,11 +435,9 @@ class LocalAPIServer: ObservableObject {
             } else if pathComponents.count == 4 && pathComponents[0] == "api" && pathComponents[1] == "screenshots" && pathComponents[3] == "image" {
                 await handleGetScreenshotImage(id: pathComponents[2], connection: connection)
             } else if pathComponents == ["api", "health"] {
-                sendResponse(connection: connection, statusCode: 200, body: ["status": "ok", "version": "1.1"])
+                sendResponse(connection: connection, statusCode: 200, body: ["status": "ok", "version": "1.2"])
             } else if pathComponents == ["api", "search"] {
-                // Extract query parameter
-                if let queryStart = path.range(of: "?q=") {
-                    let query = String(path[queryStart.upperBound...]).removingPercentEncoding ?? ""
+                if let query = queryParams["q"], !query.isEmpty {
                     await handleSearch(query: query, connection: connection)
                 } else {
                     sendResponse(connection: connection, statusCode: 400, body: ["error": "Missing query parameter 'q'"])
@@ -258,13 +450,10 @@ class LocalAPIServer: ObservableObject {
             if pathComponents == ["api", "items"] {
                 await handleCreateItem(body: body, connection: connection)
             } else if pathComponents.count == 4 && pathComponents[0] == "api" && pathComponents[1] == "items" && pathComponents[3] == "copy" {
-                // POST /api/items/{id}/copy - Copy item to system clipboard
                 await handleCopyItem(id: pathComponents[2], connection: connection)
             } else if pathComponents.count == 4 && pathComponents[0] == "api" && pathComponents[1] == "items" && pathComponents[3] == "paste" {
-                // POST /api/items/{id}/paste - Copy to clipboard and simulate Cmd+V
                 await handlePasteItem(id: pathComponents[2], connection: connection)
             } else if pathComponents == ["api", "paste"] {
-                // POST /api/paste - Paste current clipboard content (just simulate Cmd+V)
                 await handlePasteClipboard(connection: connection)
             } else {
                 sendResponse(connection: connection, statusCode: 404, body: ["error": "Not found"])
@@ -298,18 +487,19 @@ class LocalAPIServer: ObservableObject {
         }
 
         let context = modelContainer.mainContext
-        let descriptor = FetchDescriptor<ClipboardItem>(
+        var descriptor = FetchDescriptor<ClipboardItem>(
             sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
         )
+        descriptor.fetchLimit = 100
 
         do {
             let items = try context.fetch(descriptor)
-            let response = items.prefix(100).map { item in
+            let response = items.map { item in
                 [
                     "id": item.id.uuidString,
                     "type": item.contentType,
                     "text": item.textContent ?? "",
-                    "timestamp": ISO8601DateFormatter().string(from: item.timestamp),
+                    "timestamp": Self.iso8601Formatter.string(from: item.timestamp),
                     "sourceApp": item.sourceAppName ?? "",
                     "isPinned": item.isPinned,
                     "characterCount": item.characterCount ?? 0
@@ -343,12 +533,11 @@ class LocalAPIServer: ObservableObject {
             var response: [String: Any] = [
                 "id": item.id.uuidString,
                 "type": item.contentType,
-                "timestamp": ISO8601DateFormatter().string(from: item.timestamp),
+                "timestamp": Self.iso8601Formatter.string(from: item.timestamp),
                 "sourceApp": item.sourceAppName ?? "",
                 "isPinned": item.isPinned
             ]
 
-            // Include content for text/url types
             if item.contentTypeEnum == .text || item.contentTypeEnum == .url {
                 response["content"] = item.textContent ?? ""
             }
@@ -366,17 +555,18 @@ class LocalAPIServer: ObservableObject {
         }
 
         let context = modelContainer.mainContext
-        let descriptor = FetchDescriptor<ClipboardItem>(
+        var descriptor = FetchDescriptor<ClipboardItem>(
             predicate: #Predicate { $0.contentType == "image" },
             sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
         )
+        descriptor.fetchLimit = 50
 
         do {
             let items = try context.fetch(descriptor)
-            let response = items.prefix(50).map { item in
+            let response = items.map { item in
                 [
                     "id": item.id.uuidString,
-                    "timestamp": ISO8601DateFormatter().string(from: item.timestamp),
+                    "timestamp": Self.iso8601Formatter.string(from: item.timestamp),
                     "sourceApp": item.sourceAppName ?? ""
                 ] as [String: Any]
             }
@@ -405,7 +595,6 @@ class LocalAPIServer: ObservableObject {
                 return
             }
 
-            // Return image data
             sendImageResponse(connection: connection, imageData: item.content)
         } catch {
             sendResponse(connection: connection, statusCode: 500, body: ["error": error.localizedDescription])
@@ -420,13 +609,11 @@ class LocalAPIServer: ObservableObject {
             return
         }
 
-        // Debug: check what body we received
         guard let body = body else {
             sendResponse(connection: connection, statusCode: 400, body: ["error": "No body received"])
             return
         }
 
-        // Trim any whitespace/newlines from the body
         guard let bodyString = String(data: body, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !bodyString.isEmpty,
               let cleanBody = bodyString.data(using: .utf8),
@@ -436,20 +623,17 @@ class LocalAPIServer: ObservableObject {
             return
         }
 
-        // Required field: content (text)
         guard let content = json["content"] as? String else {
             sendResponse(connection: connection, statusCode: 400, body: ["error": "Missing required field 'content'"])
             return
         }
 
-        // Optional fields
         let contentType = (json["type"] as? String) ?? "text"
         let sourceApp = json["sourceApp"] as? String
         let sourceAppName = json["sourceAppName"] as? String ?? "API"
         let isPinned = json["isPinned"] as? Bool ?? false
         let isSensitive = json["isSensitive"] as? Bool ?? false
 
-        // Validate content type
         guard ["text", "url"].contains(contentType) else {
             sendResponse(connection: connection, statusCode: 400, body: ["error": "Only 'text' and 'url' types supported via API"])
             return
@@ -457,7 +641,6 @@ class LocalAPIServer: ObservableObject {
 
         let context = modelContainer.mainContext
 
-        // Create the item
         let item = ClipboardItem(
             content: content.data(using: .utf8) ?? Data(),
             textContent: content,
@@ -479,7 +662,7 @@ class LocalAPIServer: ObservableObject {
             sendResponse(connection: connection, statusCode: 201, body: [
                 "id": item.id.uuidString,
                 "type": item.contentType,
-                "timestamp": ISO8601DateFormatter().string(from: item.timestamp),
+                "timestamp": Self.iso8601Formatter.string(from: item.timestamp),
                 "message": "Item created successfully"
             ])
         } catch {
@@ -549,6 +732,31 @@ class LocalAPIServer: ObservableObject {
         }
     }
 
+    // MARK: - Clipboard Operations Helper
+
+    /// Copy a clipboard item to the system pasteboard
+    private func copyItemToPasteboard(_ item: ClipboardItem) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+
+        switch item.contentTypeEnum {
+        case .text, .url:
+            if let text = item.textContent {
+                pasteboard.setString(text, forType: .string)
+            }
+        case .image:
+            if let image = NSImage(data: item.content) {
+                pasteboard.writeObjects([image])
+            }
+        case .file:
+            if let pathsString = item.textContent {
+                let paths = pathsString.components(separatedBy: "\n")
+                let urls = paths.compactMap { URL(fileURLWithPath: $0) }
+                pasteboard.writeObjects(urls as [NSURL])
+            }
+        }
+    }
+
     private func handleCopyItem(id: String, connection: NWConnection) async {
         guard let modelContainer = modelContainer,
               let uuid = UUID(uuidString: id) else {
@@ -568,26 +776,7 @@ class LocalAPIServer: ObservableObject {
                 return
             }
 
-            // Copy to system clipboard
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-
-            switch item.contentTypeEnum {
-            case .text, .url:
-                if let text = item.textContent {
-                    pasteboard.setString(text, forType: .string)
-                }
-            case .image:
-                if let image = NSImage(data: item.content) {
-                    pasteboard.writeObjects([image])
-                }
-            case .file:
-                if let pathsString = item.textContent {
-                    let paths = pathsString.components(separatedBy: "\n")
-                    let urls = paths.compactMap { URL(fileURLWithPath: $0) }
-                    pasteboard.writeObjects(urls as [NSURL])
-                }
-            }
+            copyItemToPasteboard(item)
 
             AppLogger.clipboard.info("Copied item to clipboard via API: \(id)")
             sendResponse(connection: connection, statusCode: 200, body: ["message": "Item copied to clipboard"])
@@ -615,28 +804,8 @@ class LocalAPIServer: ObservableObject {
                 return
             }
 
-            // Copy to system clipboard
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
+            copyItemToPasteboard(item)
 
-            switch item.contentTypeEnum {
-            case .text, .url:
-                if let text = item.textContent {
-                    pasteboard.setString(text, forType: .string)
-                }
-            case .image:
-                if let image = NSImage(data: item.content) {
-                    pasteboard.writeObjects([image])
-                }
-            case .file:
-                if let pathsString = item.textContent {
-                    let paths = pathsString.components(separatedBy: "\n")
-                    let urls = paths.compactMap { URL(fileURLWithPath: $0) }
-                    pasteboard.writeObjects(urls as [NSURL])
-                }
-            }
-
-            // Small delay then simulate Cmd+V
             try? await Task.sleep(nanoseconds: 50_000_000)
             let success = await AccessibilityService.shared.simulatePaste()
 
@@ -651,7 +820,6 @@ class LocalAPIServer: ObservableObject {
     }
 
     private func handlePasteClipboard(connection: NWConnection) async {
-        // Just simulate Cmd+V for whatever is currently in the clipboard
         let success = await AccessibilityService.shared.simulatePaste()
 
         AppLogger.clipboard.info("Paste clipboard via API, success: \(success)")
@@ -670,14 +838,15 @@ class LocalAPIServer: ObservableObject {
         let context = modelContainer.mainContext
         let lowercaseQuery = query.lowercased()
 
-        let descriptor = FetchDescriptor<ClipboardItem>(
+        // Limit initial fetch for performance
+        var descriptor = FetchDescriptor<ClipboardItem>(
             sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
         )
+        descriptor.fetchLimit = 200
 
         do {
             let allItems = try context.fetch(descriptor)
 
-            // Filter items that contain the search query
             let matchingItems = allItems.filter { item in
                 item.searchableText.contains(lowercaseQuery) ||
                 (item.textContent?.lowercased().contains(lowercaseQuery) ?? false)
@@ -688,7 +857,7 @@ class LocalAPIServer: ObservableObject {
                     "id": item.id.uuidString,
                     "type": item.contentType,
                     "text": item.textContent ?? "",
-                    "timestamp": ISO8601DateFormatter().string(from: item.timestamp),
+                    "timestamp": Self.iso8601Formatter.string(from: item.timestamp),
                     "sourceApp": item.sourceAppName ?? "",
                     "isPinned": item.isPinned
                 ] as [String: Any]
@@ -715,12 +884,17 @@ class LocalAPIServer: ObservableObject {
             HTTP/1.1 \(statusCode) \(statusText)\r
             Content-Type: application/json\r
             Content-Length: \(jsonData.count)\r
-            Access-Control-Allow-Origin: *\r
+            Access-Control-Allow-Origin: http://localhost\r
+            Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r
+            Access-Control-Allow-Headers: Authorization, Content-Type\r
             \r
 
             """
 
-            var responseData = response.data(using: .utf8)!
+            guard var responseData = response.data(using: .utf8) else {
+                connection.cancel()
+                return
+            }
             responseData.append(jsonData)
 
             connection.send(content: responseData, completion: .contentProcessed { _ in
@@ -731,17 +905,43 @@ class LocalAPIServer: ObservableObject {
         }
     }
 
-    private func sendImageResponse(connection: NWConnection, imageData: Data) {
+    private func sendCorsPreflightResponse(connection: NWConnection) {
         let response = """
-        HTTP/1.1 200 OK\r
-        Content-Type: image/png\r
-        Content-Length: \(imageData.count)\r
-        Access-Control-Allow-Origin: *\r
+        HTTP/1.1 204 No Content\r
+        Access-Control-Allow-Origin: http://localhost\r
+        Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r
+        Access-Control-Allow-Headers: Authorization, Content-Type\r
+        Access-Control-Max-Age: 86400\r
         \r
 
         """
 
-        var responseData = response.data(using: .utf8)!
+        guard let responseData = response.data(using: .utf8) else {
+            connection.cancel()
+            return
+        }
+
+        connection.send(content: responseData, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
+    }
+
+    private func sendImageResponse(connection: NWConnection, imageData: Data) {
+        let mimeType = mimeTypeForImageData(imageData)
+
+        let response = """
+        HTTP/1.1 200 OK\r
+        Content-Type: \(mimeType)\r
+        Content-Length: \(imageData.count)\r
+        Access-Control-Allow-Origin: http://localhost\r
+        \r
+
+        """
+
+        guard var responseData = response.data(using: .utf8) else {
+            connection.cancel()
+            return
+        }
         responseData.append(imageData)
 
         connection.send(content: responseData, completion: .contentProcessed { _ in
@@ -753,10 +953,13 @@ class LocalAPIServer: ObservableObject {
         switch code {
         case 200: return "OK"
         case 201: return "Created"
+        case 204: return "No Content"
         case 400: return "Bad Request"
         case 401: return "Unauthorized"
         case 404: return "Not Found"
         case 405: return "Method Not Allowed"
+        case 413: return "Payload Too Large"
+        case 429: return "Too Many Requests"
         case 500: return "Internal Server Error"
         default: return "Unknown"
         }
@@ -766,8 +969,11 @@ class LocalAPIServer: ObservableObject {
 // MARK: - Keychain Helper
 
 enum KeychainHelper {
-    static func save(key: String, value: String) {
-        let data = value.data(using: .utf8)!
+    @discardableResult
+    static func save(key: String, value: String) -> Bool {
+        guard let data = value.data(using: .utf8) else {
+            return false
+        }
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -775,8 +981,14 @@ enum KeychainHelper {
             kSecValueData as String: data
         ]
 
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        // Delete any existing item first
+        let deleteStatus = SecItemDelete(query as CFDictionary)
+        if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
+            // Log but continue - we'll try to add anyway
+        }
+
+        let addStatus = SecItemAdd(query as CFDictionary, nil)
+        return addStatus == errSecSuccess
     }
 
     static func load(key: String) -> String? {
@@ -799,12 +1011,14 @@ enum KeychainHelper {
         return value
     }
 
-    static func delete(key: String) {
+    @discardableResult
+    static func delete(key: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key
         ]
 
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 }

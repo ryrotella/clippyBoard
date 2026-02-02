@@ -34,6 +34,13 @@ A powerful, privacy-focused clipboard history manager for macOS. Keep your clipb
 - **Quick paste** — Recent items with `Option+1` through `Option+5`
 - **Customizable shortcuts** — Set your own key combinations
 
+### Screenshot History
+- Automatically captures screenshots to clipboard history
+- Quick access to recent screenshots from the panel
+- Works with `Cmd+Shift+3`, `Cmd+Shift+4`, and `Cmd+Shift+5`
+- Thumbnails preview in clipboard list
+- Requires Full Disk Access permission (optional)
+
 ### AI Agent API
 - Local REST API for automation and AI integration
 - Full CRUD operations on clipboard items
@@ -79,6 +86,14 @@ Build and run with Xcode (`Cmd+R`).
 | Full Disk Access | Optional | Screenshot history capture |
 
 ClippyBoard works without these permissions in copy-only mode.
+
+### Enabling Screenshot History
+
+1. Open **System Settings** → **Privacy & Security** → **Full Disk Access**
+2. Click the **+** button and add ClippyBoard
+3. Restart ClippyBoard
+
+Screenshots will now automatically appear in your clipboard history.
 
 ---
 

@@ -32,7 +32,7 @@ A powerful, privacy-focused clipboard history manager for macOS. Keep your clipb
 ### Keyboard-Driven
 - **Global hotkey** — Open from anywhere (default: `Cmd+Shift+V`)
 - **Quick paste** — Recent items with `Option+1` through `Option+5`
-- **Customizable shortcuts** — Set your own key combinations - thank you to @soffes and his HotKey for mac repo! Link: https://github.com/soffes/HotKey
+- **Customizable shortcuts** — Set your own key combinations - thank you to @soffes and his HotKey for MacOS [repo!](https://github.com/soffes/HotKey)
 
 ### Screenshot History
 - Automatically captures screenshots to clipboard history

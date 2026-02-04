@@ -126,6 +126,13 @@ class PopoutBoardWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// Close and clean up the window (call on app termination)
+    func closeWindow() {
+        saveFrame()
+        window?.orderOut(nil)
+        window?.close()
+    }
+
     // MARK: - NSWindowDelegate
 
     func windowDidResize(_ notification: Notification) {

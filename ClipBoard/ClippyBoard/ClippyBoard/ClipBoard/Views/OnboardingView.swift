@@ -3,6 +3,7 @@ import SwiftUI
 struct OnboardingView: View {
     @ObservedObject private var permissionService = PermissionService.shared
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var bookmarkManager = SecurityScopedBookmarkManager.shared
 
     @State private var currentStep = 0
     @Environment(\.dismiss) private var dismiss
@@ -146,7 +147,7 @@ struct OnboardingView: View {
         .padding(.horizontal, 16)
     }
 
-    // MARK: - Full Disk Access Step
+    // MARK: - Screenshots Folder Step
 
     private var fullDiskAccessStep: some View {
         ScrollView {
@@ -161,26 +162,44 @@ struct OnboardingView: View {
                     .font(.title2)
                     .fontWeight(.semibold)
 
-                Text("Full Disk Access allows ClipBoard to automatically save your screenshots to history.")
+                Text("Select your Screenshots folder to automatically capture screenshots to your clipboard history.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
 
                 VStack(spacing: 12) {
-                    if permissionService.hasFullDiskAccess {
-                        Label("Permission Granted", systemImage: "checkmark.circle.fill")
+                    if bookmarkManager.hasScreenshotsFolderAccess,
+                       let url = bookmarkManager.screenshotsFolderURL {
+                        Label("Folder Selected", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                             .font(.headline)
+
+                        HStack {
+                            Image(systemName: "folder.fill")
+                                .foregroundStyle(.secondary)
+                            Text(url.lastPathComponent)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(8)
+
+                        Button("Change Folder") {
+                            bookmarkManager.selectScreenshotsFolder()
+                        }
+                        .buttonStyle(.bordered)
                     } else {
-                        Button("Open System Settings") {
-                            permissionService.openFullDiskAccessSettings()
+                        Button("Select Screenshots Folder") {
+                            bookmarkManager.selectScreenshotsFolder()
                         }
                         .buttonStyle(.borderedProminent)
 
-                        Text("This is optional. Skip if you don't want screenshot history.")
+                        Text("Usually this is your Desktop or a Screenshots folder.\nThis is optional - skip if you don't want screenshot history.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                 }
 
@@ -215,9 +234,9 @@ struct OnboardingView: View {
                     }
 
                     HStack {
-                        Image(systemName: permissionService.hasFullDiskAccess ? "checkmark.circle.fill" : "xmark.circle")
-                            .foregroundStyle(permissionService.hasFullDiskAccess ? .green : .orange)
-                        Text("Screenshot History: \(permissionService.hasFullDiskAccess ? "Enabled" : "Disabled")")
+                        Image(systemName: bookmarkManager.hasScreenshotsFolderAccess ? "checkmark.circle.fill" : "xmark.circle")
+                            .foregroundStyle(bookmarkManager.hasScreenshotsFolderAccess ? .green : .orange)
+                        Text("Screenshot History: \(bookmarkManager.hasScreenshotsFolderAccess ? "Enabled" : "Disabled")")
                             .font(.subheadline)
                     }
                 }

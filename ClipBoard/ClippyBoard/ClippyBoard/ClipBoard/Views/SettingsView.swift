@@ -8,6 +8,7 @@ struct SettingsView: View {
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var permissionService = PermissionService.shared
     @ObservedObject private var apiServer = LocalAPIServer.shared
+    @ObservedObject private var bookmarkManager = SecurityScopedBookmarkManager.shared
 
     @State private var showingClearConfirmation = false
     @State private var launchAtLogin = LaunchAtLoginService.shared.isEnabled
@@ -483,6 +484,22 @@ struct SettingsView: View {
                             Text(apiServer.isRunning ? "Running" : "Stopped")
                                 .foregroundStyle(.secondary)
                         }
+                        if !apiServer.isRunning {
+                            Button("Start") {
+                                apiServer.start()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        } else {
+                            Button("Restart") {
+                                apiServer.stop()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    apiServer.start()
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                     }
 
                     if let token = apiServer.currentToken {
@@ -542,26 +559,53 @@ struct SettingsView: View {
                         .buttonStyle(.bordered)
                     }
                 }
+            } header: {
+                Text("Permissions")
+            } footer: {
+                Text("Accessibility enables click-to-paste.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
+            Section {
                 HStack {
-                    Text("Full Disk Access")
+                    Text("Screenshots Folder")
                     Spacer()
-                    if permissionService.hasFullDiskAccess {
-                        Label("Granted", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
+                    if bookmarkManager.hasScreenshotsFolderAccess,
+                       let url = bookmarkManager.screenshotsFolderURL {
+                        Text(url.lastPathComponent)
+                            .foregroundStyle(.secondary)
+                        Button("Change") {
+                            bookmarkManager.selectScreenshotsFolder()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     } else {
-                        Button("Open Settings") {
-                            permissionService.openFullDiskAccessSettings()
+                        Button("Select Folder") {
+                            bookmarkManager.selectScreenshotsFolder()
                         }
                         .buttonStyle(.bordered)
                     }
                 }
+
+                if bookmarkManager.hasScreenshotsFolderAccess {
+                    Button("Remove Folder Access", role: .destructive) {
+                        bookmarkManager.clearScreenshotsFolder()
+                    }
+                    .foregroundStyle(.red)
+                }
             } header: {
-                Text("Permissions")
+                Text("Screenshot History")
             } footer: {
-                Text("Accessibility enables click-to-paste. Full Disk Access enables screenshot history.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if bookmarkManager.hasScreenshotsFolderAccess {
+                    Text("Screenshots saved to the selected folder will be captured automatically.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Select your Screenshots folder to enable automatic screenshot history. Usually this is your Desktop or a Screenshots folder.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {

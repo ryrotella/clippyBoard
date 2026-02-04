@@ -608,6 +608,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - App Termination
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Unregister hotkeys (synchronous, fast)
+        if let hotKeyRef = hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
+        }
+        if let popoutHotKeyRef = popoutHotKeyRef {
+            UnregisterEventHotKey(popoutHotKeyRef)
+            self.popoutHotKeyRef = nil
+        }
+        for ref in quickAccessHotKeyRefs {
+            if let ref = ref {
+                UnregisterEventHotKey(ref)
+            }
+        }
+        quickAccessHotKeyRefs.removeAll()
+
+        // Stop monitoring (just invalidates timers, fast)
+        clipboardService.stopMonitoring()
+        screenshotService.stopMonitoring()
+
+        // Stop API server
+        LocalAPIServer.shared.stop()
+
+        // Release security-scoped resources
+        SecurityScopedBookmarkManager.shared.stopAccessingFolder()
+
+        // Note: Windows will close automatically when app terminates
+        // No need to manually close them here
+    }
+
     deinit {
         // Unregister hotkeys on cleanup
         if let hotKeyRef = hotKeyRef {

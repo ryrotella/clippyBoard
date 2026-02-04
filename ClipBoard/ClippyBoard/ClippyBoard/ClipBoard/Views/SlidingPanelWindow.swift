@@ -33,7 +33,8 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
 
     private func setupPanel() {
         let settings = AppSettings.shared
-        let panelSize = calculatePanelSize()
+        let screen = screenWithMouse() ?? NSScreen.main ?? NSScreen.screens.first!
+        let panelSize = calculatePanelSize(for: screen)
 
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: panelSize.width, height: panelSize.height),
@@ -99,49 +100,57 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
         panel?.level = settings.panelAlwaysOnTop ? .floating : .normal
     }
 
-    private func calculatePanelSize() -> NSSize {
+    /// Returns the screen containing the mouse cursor
+    private func screenWithMouse() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first { screen in
+            NSMouseInRect(mouseLocation, screen.frame, false)
+        } ?? NSScreen.main
+    }
+
+    private func calculatePanelSize(for screen: NSScreen) -> NSSize {
         let settings = AppSettings.shared
         let edge = settings.panelEdgeSetting
 
         switch edge {
         case .left, .right:
-            return NSSize(width: settings.slidingPanelWidth, height: NSScreen.main?.frame.height ?? 800)
+            return NSSize(width: settings.slidingPanelWidth, height: screen.frame.height)
         case .top, .bottom:
-            return NSSize(width: NSScreen.main?.frame.width ?? 1200, height: settings.slidingPanelHeight)
+            return NSSize(width: screen.frame.width, height: settings.slidingPanelHeight)
         }
     }
 
-    private func calculateOffscreenFrame() -> NSRect {
-        guard let screen = NSScreen.main else { return .zero }
+    private func calculateOffscreenFrame(for screen: NSScreen) -> NSRect {
         let settings = AppSettings.shared
-        let panelSize = calculatePanelSize()
+        let panelSize = calculatePanelSize(for: screen)
+        let screenFrame = screen.frame
 
         switch settings.panelEdgeSetting {
         case .left:
-            return NSRect(x: -panelSize.width, y: 0, width: panelSize.width, height: screen.frame.height)
+            return NSRect(x: screenFrame.minX - panelSize.width, y: screenFrame.minY, width: panelSize.width, height: screenFrame.height)
         case .right:
-            return NSRect(x: screen.frame.width, y: 0, width: panelSize.width, height: screen.frame.height)
+            return NSRect(x: screenFrame.maxX, y: screenFrame.minY, width: panelSize.width, height: screenFrame.height)
         case .top:
-            return NSRect(x: 0, y: screen.frame.height, width: screen.frame.width, height: panelSize.height)
+            return NSRect(x: screenFrame.minX, y: screenFrame.maxY, width: screenFrame.width, height: panelSize.height)
         case .bottom:
-            return NSRect(x: 0, y: -panelSize.height, width: screen.frame.width, height: panelSize.height)
+            return NSRect(x: screenFrame.minX, y: screenFrame.minY - panelSize.height, width: screenFrame.width, height: panelSize.height)
         }
     }
 
-    private func calculateOnscreenFrame() -> NSRect {
-        guard let screen = NSScreen.main else { return .zero }
+    private func calculateOnscreenFrame(for screen: NSScreen) -> NSRect {
         let settings = AppSettings.shared
-        let panelSize = calculatePanelSize()
+        let panelSize = calculatePanelSize(for: screen)
+        let screenFrame = screen.frame
 
         switch settings.panelEdgeSetting {
         case .left:
-            return NSRect(x: 0, y: 0, width: panelSize.width, height: screen.frame.height)
+            return NSRect(x: screenFrame.minX, y: screenFrame.minY, width: panelSize.width, height: screenFrame.height)
         case .right:
-            return NSRect(x: screen.frame.width - panelSize.width, y: 0, width: panelSize.width, height: screen.frame.height)
+            return NSRect(x: screenFrame.maxX - panelSize.width, y: screenFrame.minY, width: panelSize.width, height: screenFrame.height)
         case .top:
-            return NSRect(x: 0, y: screen.frame.height - panelSize.height, width: screen.frame.width, height: panelSize.height)
+            return NSRect(x: screenFrame.minX, y: screenFrame.maxY - panelSize.height, width: screenFrame.width, height: panelSize.height)
         case .bottom:
-            return NSRect(x: 0, y: 0, width: screen.frame.width, height: panelSize.height)
+            return NSRect(x: screenFrame.minX, y: screenFrame.minY, width: screenFrame.width, height: panelSize.height)
         }
     }
 
@@ -159,9 +168,12 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
             return
         }
 
-        // Slide in from edge
-        let startFrame = calculateOffscreenFrame()
-        let endFrame = calculateOnscreenFrame()
+        // Get the screen where the mouse is located
+        guard let screen = screenWithMouse() else { return }
+
+        // Slide in from edge on the correct screen
+        let startFrame = calculateOffscreenFrame(for: screen)
+        let endFrame = calculateOnscreenFrame(for: screen)
 
         panel?.setFrame(startFrame, display: false)
         panel?.makeKeyAndOrderFront(nil)
@@ -185,8 +197,16 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
             return
         }
 
+        // Get the screen where the panel currently is
+        let screen = panel?.screen ?? screenWithMouse() ?? NSScreen.main
+        guard let screen = screen else {
+            panel?.orderOut(nil)
+            isVisible = false
+            return
+        }
+
         // Slide out to edge
-        let endFrame = calculateOffscreenFrame()
+        let endFrame = calculateOffscreenFrame(for: screen)
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.2
@@ -196,6 +216,14 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
             self?.panel?.orderOut(nil)
             self?.isVisible = false
         }
+    }
+
+    /// Close and clean up the panel (call on app termination)
+    func closePanel() {
+        panel?.orderOut(nil)
+        panel?.close()
+        panel = nil
+        isVisible = false
     }
 
     func togglePanel() {
@@ -213,23 +241,24 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
 
         let settings = AppSettings.shared
         let threshold: CGFloat = 100
+        let screen = panel?.screen ?? screenWithMouse() ?? NSScreen.main
 
         // Check if dragged far enough from edge to detach
         switch settings.panelEdgeSetting {
         case .left:
-            if location.x > threshold {
+            if let screen = screen, location.x > screen.frame.minX + threshold {
                 detachPanel(at: location)
             }
         case .right:
-            if let screen = NSScreen.main, location.x < screen.frame.width - threshold {
+            if let screen = screen, location.x < screen.frame.maxX - threshold {
                 detachPanel(at: location)
             }
         case .top:
-            if let screen = NSScreen.main, location.y < screen.frame.height - threshold {
+            if let screen = screen, location.y < screen.frame.maxY - threshold {
                 detachPanel(at: location)
             }
         case .bottom:
-            if location.y > threshold {
+            if let screen = screen, location.y > screen.frame.minY + threshold {
                 detachPanel(at: location)
             }
         }

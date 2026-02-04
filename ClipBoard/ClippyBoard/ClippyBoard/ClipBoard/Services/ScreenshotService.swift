@@ -12,22 +12,56 @@ class ScreenshotService: ObservableObject {
     private var query: NSMetadataQuery?
     private var modelContainer: ModelContainer?
     private var processedScreenshots: Set<String> = []  // Track processed files to avoid duplicates
+    private let bookmarkManager = SecurityScopedBookmarkManager.shared
 
     var onScreenshotCaptured: (() -> Void)?
+
+    init() {
+        // Listen for screenshots folder changes to restart monitoring
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleFolderChange),
+            name: .screenshotsFolderDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func handleFolderChange() {
+        AppLogger.screenshot.info("Screenshots folder changed, restarting monitoring")
+        stopMonitoring()
+        startMonitoring()
+    }
 
     func setModelContainer(_ container: ModelContainer) {
         self.modelContainer = container
     }
 
+    /// Check if screenshot monitoring is available (has folder access)
+    var canMonitorScreenshots: Bool {
+        bookmarkManager.hasScreenshotsFolderAccess
+    }
+
     func startMonitoring() {
         guard !isMonitoring else { return }
+
+        // Check if we have folder access
+        if !bookmarkManager.hasScreenshotsFolderAccess {
+            AppLogger.screenshot.info("Screenshot monitoring disabled - no folder access. User needs to select Screenshots folder in Settings.")
+            return
+        }
 
         query = NSMetadataQuery()
         guard let query = query else { return }
 
         // Search for screenshots using Spotlight metadata
         query.predicate = NSPredicate(format: "kMDItemIsScreenCapture == 1")
-        query.searchScopes = [NSMetadataQueryLocalComputerScope]
+
+        // Limit search to the authorized folder if possible
+        if let folderURL = bookmarkManager.screenshotsFolderURL {
+            query.searchScopes = [folderURL]
+        } else {
+            query.searchScopes = [NSMetadataQueryLocalComputerScope]
+        }
 
         // Sort by creation date, newest first
         query.sortDescriptors = [NSSortDescriptor(key: kMDItemFSCreationDate as String, ascending: false)]
@@ -124,16 +158,20 @@ class ScreenshotService: ObservableObject {
     }
 
     private func loadAndProcessScreenshot(path: String, creationDate: Date) async {
-        let url = URL(fileURLWithPath: path)
+        // Check if this path is in our authorized folder
+        guard bookmarkManager.isPathAuthorized(path) else {
+            AppLogger.screenshot.debug("Screenshot not in authorized folder, skipping: \(path, privacy: .public)")
+            return
+        }
 
         // Debug: Check file accessibility
-        AppLogger.screenshot.debug("Checking file accessibility")
+        AppLogger.screenshot.debug("Checking file accessibility with security-scoped bookmark")
 
-        // Try reading file data directly
+        // Try reading file data using the security-scoped bookmark
         var imageData: Data?
         for attempt in 1...3 {
             do {
-                imageData = try Data(contentsOf: url)
+                imageData = try bookmarkManager.readFileData(at: path)
                 if imageData != nil { break }
             } catch {
                 AppLogger.screenshot.warning("Retry \(attempt) - Error: \(error.localizedDescription, privacy: .public)")

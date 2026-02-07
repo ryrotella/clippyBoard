@@ -162,8 +162,7 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
 
         if isDetached {
             // Show as floating window
-            panel?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            panel?.orderFrontRegardless()
             isVisible = true
             return
         }
@@ -176,8 +175,7 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
         let endFrame = calculateOnscreenFrame(for: screen)
 
         panel?.setFrame(startFrame, display: false)
-        panel?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        panel?.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25
@@ -316,6 +314,7 @@ struct SlidingPanelContentView: View {
     @State private var searchText = ""
     @State private var selectedType: ContentType?
     @State private var previewingImage: ClipboardItem?
+    @State private var showShortcutHint = false
 
     var onDragStart: ((NSPoint) -> Void)?
     var onDragChanged: ((NSPoint) -> Void)?
@@ -353,6 +352,79 @@ struct SlidingPanelContentView: View {
             icon: "checkmark.circle.fill",
             playSound: settings.copyFeedbackSound
         )
+        .overlay(alignment: .center) {
+            if showShortcutHint {
+                shortcutHintOverlay
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showShortcutHint)) { _ in
+            withAnimation(.easeOut(duration: 0.3)) {
+                showShortcutHint = true
+            }
+            // Auto-dismiss after 4 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                withAnimation(.easeIn(duration: 0.3)) {
+                    showShortcutHint = false
+                }
+            }
+        }
+    }
+
+    private var shortcutHintOverlay: some View {
+        VStack(spacing: 16) {
+            // Keyboard icon with gradient background
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.blue, .purple],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 64, height: 64)
+
+                Image(systemName: "keyboard")
+                    .font(.system(size: 28, weight: .medium))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(spacing: 8) {
+                Text("Press \(settings.popoverShortcut.displayString)")
+                    .font(.system(size: 18, weight: .semibold))
+
+                Text("to show or hide ClipBoard")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button("Got it") {
+                withAnimation(.easeIn(duration: 0.2)) {
+                    showShortcutHint = false
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .padding(.top, 8)
+        }
+        .padding(32)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(.thickMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(
+                            LinearGradient(
+                                colors: [.blue.opacity(0.5), .purple.opacity(0.5)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 2
+                        )
+                )
+        )
+        .shadow(color: .blue.opacity(0.3), radius: 30, x: 0, y: 10)
     }
 
     private var panelCornerRadius: CGFloat {

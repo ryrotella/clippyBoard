@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var showingClearConfirmation = false
     @State private var launchAtLogin = LaunchAtLoginService.shared.isEnabled
     @State private var showingTokenCopied = false
+    @State private var showingInstructionsCopied = false
+    @State private var showingDocsExported = false
 
     var body: some View {
         TabView {
@@ -532,14 +534,39 @@ struct SettingsView: View {
                         apiServer.regenerateToken()
                     }
                     .foregroundStyle(.red)
+
+                    Divider()
+
+                    HStack {
+                        Button("Copy Agent Instructions") {
+                            copyAgentInstructions()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Export API Docs") {
+                            exportAPIDocs()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if showingInstructionsCopied {
+                        Text("Agent instructions copied to clipboard!")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+
+                    if showingDocsExported {
+                        Text("API documentation exported!")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
                 }
             } header: {
                 Text("Agent API")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Local HTTP API for agents and automation tools.")
-                    Text("Endpoints: GET /api/items, /api/screenshots")
-                    Text("Authentication: Bearer token in header")
+                    Text("Use \"Copy Agent Instructions\" to share with AI assistants.")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -611,6 +638,7 @@ struct SettingsView: View {
             Section {
                 Button("Show Onboarding Again") {
                     settings.onboardingCompleted = false
+                    NotificationCenter.default.post(name: .showOnboarding, object: nil)
                 }
 
                 Button("Reset All Settings") {
@@ -640,7 +668,7 @@ struct SettingsView: View {
                 .font(.title)
                 .fontWeight(.semibold)
 
-            Text("Version 1.0.0")
+            Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -667,6 +695,356 @@ struct SettingsView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Agent API Helpers
+
+    private func copyAgentInstructions() {
+        guard let token = apiServer.currentToken else { return }
+        let port = settings.apiPort
+
+        let instructions = """
+        # ClippyBoard API Access
+
+        You have access to my ClippyBoard clipboard manager API running locally.
+
+        **Connection Details:**
+        - Base URL: `http://localhost:\(port)`
+        - Token: `\(token)`
+
+        **Authentication:**
+        Include this header in all requests:
+        ```
+        Authorization: Bearer \(token)
+        ```
+
+        **Available Endpoints:**
+
+        | Method | Endpoint | Description |
+        |--------|----------|-------------|
+        | GET | /api/health | Health check |
+        | GET | /api/items | List all clipboard items |
+        | GET | /api/items/{id} | Get specific item |
+        | POST | /api/items | Create item (`{"content": "text", "type": "text"}`) |
+        | DELETE | /api/items/{id} | Delete item |
+        | PUT | /api/items/{id}/pin | Toggle pin |
+        | POST | /api/items/{id}/copy | Copy to clipboard |
+        | POST | /api/items/{id}/paste | Copy and paste to active window |
+        | POST | /api/paste | Paste current clipboard |
+        | GET | /api/screenshots | List screenshots |
+        | GET | /api/screenshots/{id}/image | Get screenshot image |
+        | GET | /api/search?q={query} | Search items |
+
+        **Example:**
+        ```bash
+        curl -H "Authorization: Bearer \(token)" http://localhost:\(port)/api/items
+        ```
+        """
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(instructions, forType: .string)
+        showingInstructionsCopied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            showingInstructionsCopied = false
+        }
+    }
+
+    private func exportAPIDocs() {
+        let docs = """
+        # ClippyBoard API Documentation
+
+        ClippyBoard provides a local HTTP API for agents and automation tools.
+
+        ## Server Configuration
+
+        - **Default Port:** \(settings.apiPort)
+        - **Binding:** localhost only (127.0.0.1)
+        - **Max Request Size:** 1MB
+        - **Rate Limiting:** 60 connections per minute per IP
+
+        ## Authentication
+
+        All endpoints require a Bearer token in the Authorization header:
+
+        ```
+        Authorization: Bearer <your-token>
+        ```
+
+        Get your token from: Settings → Advanced → Agent API → Copy Token
+
+        ## Endpoints
+
+        ### Health Check
+
+        ```
+        GET /api/health
+        ```
+
+        **Response:**
+        ```json
+        {"status": "ok", "version": "1.2"}
+        ```
+
+        ---
+
+        ### List All Clipboard Items
+
+        ```
+        GET /api/items
+        ```
+
+        **Response:**
+        ```json
+        {
+          "items": [
+            {
+              "id": "<UUID>",
+              "type": "text|url|image",
+              "text": "preview text",
+              "timestamp": "2024-01-15T10:30:00Z",
+              "sourceApp": "Application Name",
+              "isPinned": false,
+              "characterCount": 42
+            }
+          ]
+        }
+        ```
+
+        ---
+
+        ### Get Specific Item
+
+        ```
+        GET /api/items/{id}
+        ```
+
+        **Response:**
+        ```json
+        {
+          "id": "<UUID>",
+          "type": "text|url|image",
+          "content": "full content",
+          "timestamp": "2024-01-15T10:30:00Z",
+          "sourceApp": "Application Name",
+          "isPinned": false
+        }
+        ```
+
+        ---
+
+        ### Create Clipboard Item
+
+        ```
+        POST /api/items
+        Content-Type: application/json
+
+        {
+          "content": "the text content",
+          "type": "text|url",
+          "sourceApp": "optional app identifier",
+          "isPinned": false
+        }
+        ```
+
+        **Response:**
+        ```json
+        {
+          "id": "<UUID>",
+          "type": "text",
+          "timestamp": "2024-01-15T10:30:00Z",
+          "message": "Item created successfully"
+        }
+        ```
+
+        ---
+
+        ### Delete Item
+
+        ```
+        DELETE /api/items/{id}
+        ```
+
+        **Response:**
+        ```json
+        {"message": "Item deleted successfully"}
+        ```
+
+        ---
+
+        ### Toggle Pin
+
+        ```
+        PUT /api/items/{id}/pin
+        ```
+
+        **Response:**
+        ```json
+        {
+          "id": "<UUID>",
+          "isPinned": true,
+          "message": "Item pinned"
+        }
+        ```
+
+        ---
+
+        ### Copy to Clipboard
+
+        ```
+        POST /api/items/{id}/copy
+        ```
+
+        **Response:**
+        ```json
+        {"message": "Item copied to clipboard"}
+        ```
+
+        ---
+
+        ### Copy and Paste to Active Window
+
+        ```
+        POST /api/items/{id}/paste
+        ```
+
+        Requires Accessibility permissions.
+
+        **Response:**
+        ```json
+        {
+          "message": "Item pasted successfully",
+          "pasteSimulated": true
+        }
+        ```
+
+        ---
+
+        ### Paste Current Clipboard
+
+        ```
+        POST /api/paste
+        ```
+
+        Requires Accessibility permissions.
+
+        **Response:**
+        ```json
+        {
+          "message": "Paste simulated successfully",
+          "pasteSimulated": true
+        }
+        ```
+
+        ---
+
+        ### List Screenshots
+
+        ```
+        GET /api/screenshots
+        ```
+
+        **Response:**
+        ```json
+        {
+          "screenshots": [
+            {
+              "id": "<UUID>",
+              "timestamp": "2024-01-15T10:30:00Z",
+              "sourceApp": "Screenshot"
+            }
+          ]
+        }
+        ```
+
+        ---
+
+        ### Get Screenshot Image
+
+        ```
+        GET /api/screenshots/{id}/image
+        ```
+
+        **Response:** Binary image data with appropriate Content-Type header.
+
+        ---
+
+        ### Search Items
+
+        ```
+        GET /api/search?q={query}
+        ```
+
+        **Response:**
+        ```json
+        {
+          "query": "search term",
+          "count": 5,
+          "items": [...]
+        }
+        ```
+
+        ---
+
+        ## Error Responses
+
+        All errors return JSON:
+
+        ```json
+        {"error": "Error message"}
+        ```
+
+        **Status Codes:**
+        - `400` - Bad request or invalid parameters
+        - `401` - Unauthorized (invalid/missing token)
+        - `404` - Resource not found
+        - `429` - Rate limit exceeded
+        - `500` - Server error
+
+        ---
+
+        ## Example Usage with curl
+
+        ```bash
+        # Set your token
+        TOKEN="your-token-here"
+        PORT=\(settings.apiPort)
+
+        # Health check
+        curl -H "Authorization: Bearer $TOKEN" http://localhost:$PORT/api/health
+
+        # Get all items
+        curl -H "Authorization: Bearer $TOKEN" http://localhost:$PORT/api/items
+
+        # Create an item
+        curl -X POST http://localhost:$PORT/api/items \\
+          -H "Authorization: Bearer $TOKEN" \\
+          -H "Content-Type: application/json" \\
+          -d '{"content": "Hello World", "type": "text"}'
+
+        # Search
+        curl -H "Authorization: Bearer $TOKEN" "http://localhost:$PORT/api/search?q=hello"
+
+        # Paste an item to active window
+        curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:$PORT/api/items/{id}/paste
+        ```
+        """
+
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.plainText]
+        savePanel.nameFieldStringValue = "ClippyBoard-API-Docs.md"
+        savePanel.title = "Export API Documentation"
+
+        if savePanel.runModal() == .OK, let url = savePanel.url {
+            do {
+                try docs.write(to: url, atomically: true, encoding: .utf8)
+                showingDocsExported = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    showingDocsExported = false
+                }
+            } catch {
+                print("Failed to export docs: \(error)")
+            }
+        }
     }
 }
 

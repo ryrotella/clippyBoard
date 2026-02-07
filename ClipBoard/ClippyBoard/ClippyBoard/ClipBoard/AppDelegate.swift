@@ -17,6 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyRef: EventHotKeyRef?
     private var popoutHotKeyRef: EventHotKeyRef?
     private var quickAccessHotKeyRefs: [EventHotKeyRef?] = []
+    private var onboardingWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide dock icon but allow app to appear in Force Quit menu
@@ -80,8 +81,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
-        // Show onboarding if first launch
+        // Listen for show onboarding notification
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleShowOnboarding),
+            name: .showOnboarding,
+            object: nil
+        )
+
+        // Listen for onboarding completed notification
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleOnboardingCompleted),
+            name: .onboardingCompleted,
+            object: nil
+        )
+
+        // Show onboarding if first launch, otherwise show the panel with shortcut hint
         checkOnboarding()
+    }
+
+    @objc private func handleShowOnboarding() {
+        showOnboarding()
+    }
+
+    @objc private func handleOnboardingCompleted() {
+        // Capture window reference and clear it immediately to prevent re-entry
+        let window = onboardingWindow
+        onboardingWindow = nil
+
+        // Hide and close the window
+        if let window = window {
+            window.orderOut(nil)
+            // Don't call close() - just let it deallocate naturally
+        }
+
+        // Show the panel with shortcut hint after a delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.showPanelWithShortcutHint()
+        }
     }
 
     private func checkOnboarding() {
@@ -89,20 +127,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.showOnboarding()
             }
+        } else {
+            // Show the panel on launch with shortcut hint
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.showPanelWithShortcutHint()
+            }
+        }
+    }
+
+    private func showPanelWithShortcutHint() {
+        // Show the panel first
+        if AppSettings.shared.panelModeSetting == .slidingPanel {
+            ensureSlidingPanelController()
+            slidingPanelController?.showPanel()
+        } else {
+            togglePopover()
+        }
+
+        // Post notification to show shortcut hint after panel is visible
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NotificationCenter.default.post(name: .showShortcutHint, object: nil)
         }
     }
 
     private func showOnboarding() {
-        let onboardingWindow = NSWindow(
+        onboardingWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 520),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        onboardingWindow.title = "Welcome to ClipBoard"
-        onboardingWindow.center()
-        onboardingWindow.contentView = NSHostingView(rootView: OnboardingView())
-        onboardingWindow.makeKeyAndOrderFront(nil)
+        onboardingWindow?.title = "Welcome to ClipBoard"
+        onboardingWindow?.center()
+        onboardingWindow?.contentView = NSHostingView(rootView: OnboardingView())
+        onboardingWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -660,5 +718,8 @@ extension Notification.Name {
     static let didCopyItem = Notification.Name("didCopyItem")
     static let dismissClipboardUI = Notification.Name("dismissClipboardUI")
     static let quickAccessPaste = Notification.Name("quickAccessPaste")
+    static let showOnboarding = Notification.Name("showOnboarding")
+    static let showShortcutHint = Notification.Name("showShortcutHint")
+    static let onboardingCompleted = Notification.Name("onboardingCompleted")
 }
 

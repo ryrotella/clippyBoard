@@ -6,7 +6,6 @@ struct OnboardingView: View {
     @ObservedObject private var bookmarkManager = SecurityScopedBookmarkManager.shared
 
     @State private var currentStep = 0
-    @Environment(\.dismiss) private var dismiss
 
     private let totalSteps = 4
 
@@ -293,7 +292,7 @@ struct OnboardingView: View {
 
     private func completeOnboarding() {
         settings.onboardingCompleted = true
-        dismiss()
+        NotificationCenter.default.post(name: .onboardingCompleted, object: nil)
     }
 }
 

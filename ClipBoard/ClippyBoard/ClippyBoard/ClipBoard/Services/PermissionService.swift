@@ -12,6 +12,17 @@ class PermissionService: ObservableObject {
 
     private init() {
         refreshPermissionStatus()
+
+        // Refresh permissions when app becomes active (user returns from System Settings)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshPermissionStatus()
+            }
+        }
     }
 
     // MARK: - Permission Status
@@ -20,7 +31,9 @@ class PermissionService: ObservableObject {
         hasAccessibilityPermission = AXIsProcessTrusted()
         hasFullDiskAccess = checkFullDiskAccess()
 
-        AppLogger.clipboard.info("Permissions - Accessibility: \(self.hasAccessibilityPermission), Full Disk Access: \(self.hasFullDiskAccess)")
+        // Log bundle ID to help debug permission issues
+        let bundleID = Bundle.main.bundleIdentifier ?? "unknown"
+        AppLogger.clipboard.info("Permissions - Accessibility: \(self.hasAccessibilityPermission), Bundle: \(bundleID, privacy: .public)")
     }
 
     private func checkFullDiskAccess() -> Bool {
@@ -39,24 +52,41 @@ class PermissionService: ObservableObject {
     // MARK: - Request Permissions
 
     func requestAccessibilityPermission() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        let _ = AXIsProcessTrustedWithOptions(options)
+        // For sandboxed apps, AXIsProcessTrustedWithOptions prompt doesn't work reliably
+        // Open System Settings directly instead
+        openAccessibilitySettings()
 
-        // Schedule a check after user might have granted permission
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.refreshPermissionStatus()
+        // Schedule periodic checks after user might have granted permission
+        for delay in [2.0, 5.0, 10.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.refreshPermissionStatus()
+            }
         }
     }
 
     func openFullDiskAccessSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-            NSWorkspace.shared.open(url)
+        // Try the modern URL scheme first (macOS 13+), fall back to legacy
+        let urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles"
+        ]
+        for urlString in urls {
+            if let url = URL(string: urlString), NSWorkspace.shared.open(url) {
+                return
+            }
         }
     }
 
     func openAccessibilitySettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
+        // Try the modern URL scheme first (macOS 13+), fall back to legacy
+        let urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"
+        ]
+        for urlString in urls {
+            if let url = URL(string: urlString), NSWorkspace.shared.open(url) {
+                return
+            }
         }
     }
 

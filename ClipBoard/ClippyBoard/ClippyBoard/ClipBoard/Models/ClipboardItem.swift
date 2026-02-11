@@ -177,25 +177,49 @@ struct ClipboardItemDragData: Transferable {
     }
 }
 
-/// NSItemProvider support for AppKit drag and drop
+/// NSItemProvider support for AppKit drag and drop (used by .onDrag for cross-app compatibility)
 extension ClipboardItem {
+    @MainActor
     func makeItemProvider() -> NSItemProvider {
         let provider = NSItemProvider()
 
         switch contentTypeEnum {
-        case .text, .url:
+        case .text:
             if let text = textContent {
                 provider.registerObject(text as NSString, visibility: .all)
             }
 
+        case .url:
+            if let text = textContent {
+                // Register as URL first (most specific), then as plain text fallback
+                if let url = URL(string: text) {
+                    provider.registerObject(url as NSURL, visibility: .all)
+                }
+                provider.registerObject(text as NSString, visibility: .all)
+            }
+
         case .image:
-            if let nsImage = NSImage(data: content) {
+            let imageData = content
+            if let nsImage = NSImage(data: imageData) {
+                // Register PNG explicitly for non-Apple apps (Chrome, Electron, etc.)
+                if let tiffRep = nsImage.tiffRepresentation,
+                   let bitmap = NSBitmapImageRep(data: tiffRep),
+                   let pngData = bitmap.representation(using: .png, properties: [:]) {
+                    provider.registerDataRepresentation(
+                        forTypeIdentifier: UTType.png.identifier,
+                        visibility: .all
+                    ) { completion in
+                        completion(pngData, nil)
+                        return nil
+                    }
+                }
+                // Register NSImage for Apple apps (provides TIFF)
                 provider.registerObject(nsImage, visibility: .all)
             }
 
         case .file:
             if let pathsString = String(data: content, encoding: .utf8) {
-                let paths = pathsString.components(separatedBy: "\n")
+                let paths = pathsString.components(separatedBy: "\n").filter { !$0.isEmpty }
                 for path in paths {
                     let url = URL(fileURLWithPath: path)
                     provider.registerObject(url as NSURL, visibility: .all)

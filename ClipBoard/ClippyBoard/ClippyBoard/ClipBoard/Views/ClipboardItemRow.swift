@@ -85,9 +85,6 @@ struct ClipboardItemRow: View {
                 .stroke(borderColor, lineWidth: settings.isHighContrast ? 1 : 0)
         )
         .contentShape(Rectangle())
-        .draggable(ClipboardItemDragData(item: item)) {
-            ClipboardItemDragPreview(item: item)
-        }
     }
 
     // MARK: - Main Content View (Hero)

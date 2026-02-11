@@ -219,22 +219,26 @@ struct ClipboardContentView: View {
                     handleCopyOnly(item)
                 }
             )
-                .onTapGesture(count: 2) {
-                    // Double-tap: preview for images, copy for others
-                    if item.contentTypeEnum == .image {
-                        previewingImage = item
-                    } else {
-                        handlePaste(item)
+                .nativeDraggable(
+                    item: item,
+                    canDrag: !item.isSensitive || isRevealed,
+                    onSingleClick: {
+                        // Single click: reveal if sensitive, otherwise paste
+                        if item.isSensitive && !isRevealed {
+                            handleReveal(item)
+                        } else {
+                            handlePaste(item)
+                        }
+                    },
+                    onDoubleClick: {
+                        // Double-click: preview for images, copy for others
+                        if item.contentTypeEnum == .image {
+                            previewingImage = item
+                        } else {
+                            handlePaste(item)
+                        }
                     }
-                }
-                .onTapGesture(count: 1) {
-                    // Single tap: reveal if sensitive, otherwise paste
-                    if item.isSensitive && !isRevealed {
-                        handleReveal(item)
-                    } else {
-                        handlePaste(item)
-                    }
-                }
+                )
                 .contextMenu {
                     itemContextMenu(for: item)
                 }

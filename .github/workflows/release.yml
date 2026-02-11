@@ -126,7 +126,10 @@ jobs:
 
       - name: Verify notarization
         run: |
-          spctl -a -vvv -t install "$RUNNER_TEMP/ClippyBoard-${{ steps.version.outputs.TAG }}.dmg"
+          # Mount the DMG and verify the app inside
+          MOUNT_DIR=$(hdiutil attach "$RUNNER_TEMP/ClippyBoard-${{ steps.version.outputs.TAG }}.dmg" -nobrowse | tail -1 | awk '{print $3}')
+          spctl -a -vvv "$MOUNT_DIR/ClippyBoard.app"
+          hdiutil detach "$MOUNT_DIR"
 
       - name: Calculate SHA256
         id: sha

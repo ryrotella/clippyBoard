@@ -128,14 +128,22 @@ struct OnboardingView: View {
                             .foregroundStyle(.green)
                             .font(.headline)
                     } else {
-                        Button("Grant Accessibility Permission") {
+                        Button("Open Accessibility Settings") {
                             permissionService.requestAccessibilityPermission()
                         }
                         .buttonStyle(.borderedProminent)
 
-                        Text("You can skip this - ClipBoard will work in copy-only mode.")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Click the \"+\" button", systemImage: "1.circle.fill")
+                            Label("Select ClippyBoard from Applications", systemImage: "2.circle.fill")
+                            Label("Toggle it on", systemImage: "3.circle.fill")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                        Text("You can skip this — ClipBoard will work in copy-only mode.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
                     }
                 }
 

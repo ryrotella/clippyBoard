@@ -52,8 +52,9 @@ class PermissionService: ObservableObject {
     // MARK: - Request Permissions
 
     func requestAccessibilityPermission() {
-        // For sandboxed apps, AXIsProcessTrustedWithOptions prompt doesn't work reliably
-        // Open System Settings directly instead
+        // For sandboxed apps, AXIsProcessTrustedWithOptions prompt doesn't work —
+        // the sandbox blocks the system dialog and auto-registration in the
+        // Accessibility list. Open System Settings directly instead.
         openAccessibilitySettings()
 
         // Schedule periodic checks after user might have granted permission

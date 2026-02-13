@@ -2,6 +2,12 @@ import SwiftUI
 import AppKit
 import SwiftData
 
+// MARK: - Keyable Panel (allows text input in non-activating panel)
+
+class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 // MARK: - Sliding Panel Window Controller
 
 @MainActor
@@ -36,7 +42,7 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
         let screen = screenWithMouse() ?? NSScreen.main ?? NSScreen.screens.first!
         let panelSize = calculatePanelSize(for: screen)
 
-        panel = NSPanel(
+        panel = KeyablePanel(
             contentRect: NSRect(x: 0, y: 0, width: panelSize.width, height: panelSize.height),
             styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
@@ -163,6 +169,7 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
         if isDetached {
             // Show as floating window
             panel?.orderFrontRegardless()
+            panel?.makeKey()
             isVisible = true
             return
         }
@@ -176,6 +183,7 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
 
         panel?.setFrame(startFrame, display: false)
         panel?.orderFrontRegardless()
+        panel?.makeKey()
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25

@@ -614,6 +614,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if popover.isShown {
                 popover.performClose(nil)
             } else {
+                // Save the currently active app before we take focus
+                AccessibilityService.shared.savePreviousApp()
+
                 // Refresh items before showing
                 clipboardService.refreshItems()
 

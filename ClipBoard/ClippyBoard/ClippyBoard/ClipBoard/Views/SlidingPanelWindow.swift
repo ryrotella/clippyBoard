@@ -164,12 +164,17 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
 
     func showPanel() {
         guard !isVisible else { return }
+
+        // Save the currently active app before we take focus
+        AccessibilityService.shared.savePreviousApp()
+
         clipboardService.refreshItems()
 
         if isDetached {
             // Show as floating window
             panel?.orderFrontRegardless()
             panel?.makeKey()
+            NSApp.activate(ignoringOtherApps: true)
             isVisible = true
             return
         }
@@ -184,6 +189,8 @@ class SlidingPanelWindowController: NSObject, ObservableObject {
         panel?.setFrame(startFrame, display: false)
         panel?.orderFrontRegardless()
         panel?.makeKey()
+        // Activate app so search TextField can receive keyboard input
+        NSApp.activate(ignoringOtherApps: true)
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25

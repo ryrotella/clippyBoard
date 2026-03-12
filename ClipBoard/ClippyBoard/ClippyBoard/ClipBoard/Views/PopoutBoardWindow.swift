@@ -44,6 +44,18 @@ class PopoutBoardWindowController: NSWindowController, NSWindowDelegate {
         setupContent()
         loadFrame()
         applyFloatingState()
+
+        // Observe dismiss notification so click-to-paste can close this window
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDismissNotification),
+            name: .dismissClipboardUI,
+            object: nil
+        )
+    }
+
+    @objc private func handleDismissNotification() {
+        window?.orderOut(nil)
     }
 
     @available(*, unavailable)
@@ -106,6 +118,9 @@ class PopoutBoardWindowController: NSWindowController, NSWindowDelegate {
 
     func showWindow() {
         guard let window = window else { return }
+
+        // Save the currently active app before we take focus
+        AccessibilityService.shared.savePreviousApp()
 
         if !window.isVisible {
             loadFrame()

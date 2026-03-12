@@ -33,6 +33,32 @@ class AccessibilityService: ObservableObject {
         }
     }
 
+    // MARK: - Previous App Tracking
+
+    /// The app that was frontmost before our UI was shown
+    private(set) var previousApp: NSRunningApplication?
+
+    /// Save the currently frontmost application (call before showing our UI)
+    func savePreviousApp() {
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        // Don't save ourselves as the previous app
+        if frontmost?.bundleIdentifier != Bundle.main.bundleIdentifier {
+            previousApp = frontmost
+            AppLogger.hotkeys.debug("Saved previous app: \(frontmost?.localizedName ?? "nil", privacy: .public)")
+        }
+    }
+
+    /// Re-activate the previously frontmost application (call before simulating paste)
+    func restorePreviousApp() {
+        guard let app = previousApp else {
+            AppLogger.hotkeys.debug("No previous app to restore")
+            return
+        }
+        app.activate()
+        AppLogger.hotkeys.debug("Restored previous app: \(app.localizedName ?? "unknown", privacy: .public)")
+        previousApp = nil
+    }
+
     // MARK: - Paste Simulation
 
     /// Simulate Cmd+V paste keystroke

@@ -292,10 +292,12 @@ struct ClipboardContentView: View {
 
                 // If click-to-paste is enabled, paste to active app
                 if AppSettings.shared.clickToPaste {
-                    // Close popover/panel first to return focus
+                    // Close popover/panel first
                     NotificationCenter.default.post(name: .dismissClipboardUI, object: nil)
-                    // Small delay to allow window to close
-                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    // Restore focus to the previously active app
+                    AccessibilityService.shared.restorePreviousApp()
+                    // Allow time for the app to regain focus
+                    try? await Task.sleep(nanoseconds: 150_000_000)
                     _ = await AccessibilityService.shared.simulatePaste()
                 }
             }

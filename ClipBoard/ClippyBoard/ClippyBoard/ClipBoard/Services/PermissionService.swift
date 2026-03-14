@@ -52,15 +52,17 @@ class PermissionService: ObservableObject {
     // MARK: - Request Permissions
 
     func requestAccessibilityPermission() {
-        // For sandboxed apps, AXIsProcessTrustedWithOptions prompt doesn't work —
-        // the sandbox blocks the system dialog and auto-registration in the
-        // Accessibility list. Open System Settings directly instead.
-        openAccessibilitySettings()
+        // Prompt the system accessibility dialog and auto-register in the Accessibility list
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        let trusted = AXIsProcessTrustedWithOptions(options)
+        hasAccessibilityPermission = trusted
 
-        // Schedule periodic checks after user might have granted permission
-        for delay in [2.0, 5.0, 10.0] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.refreshPermissionStatus()
+        if !trusted {
+            // Schedule periodic checks after user might have granted permission
+            for delay in [2.0, 5.0, 10.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.refreshPermissionStatus()
+                }
             }
         }
     }

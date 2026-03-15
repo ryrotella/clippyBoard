@@ -91,6 +91,23 @@ class SecurityScopedBookmarkManager: ObservableObject {
         return fileURL.path.hasPrefix(folderURL.path)
     }
 
+    /// List contents of the authorized folder with security-scoped access
+    func contentsOfDirectory(at url: URL) throws -> [URL] {
+        guard startAccessingFolder() else {
+            throw NSError(
+                domain: "SecurityScopedBookmarkManager",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Cannot access security-scoped resource"]
+            )
+        }
+
+        return try FileManager.default.contentsOfDirectory(
+            at: url,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+    }
+
     /// Read file data with security-scoped access
     func readFileData(at path: String) throws -> Data {
         guard isPathAuthorized(path) else {

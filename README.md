@@ -38,6 +38,7 @@ A powerful, privacy-focused clipboard history manager for macOS. Keep your clipb
 - Automatically captures screenshots to clipboard history
 - Quick access to recent screenshots from the panel
 - Works with `Cmd+Shift+3`, `Cmd+Shift+4`, and `Cmd+Shift+5`
+- **Phone screenshot sync** — Send iPhone screenshots via iOS Shortcuts + iCloud Drive
 - Thumbnails preview in clipboard list
 - Requires Full Disk Access permission (optional)
 
@@ -94,6 +95,22 @@ ClippyBoard works without these permissions in copy-only mode.
 3. Restart ClippyBoard
 
 Screenshots will now automatically appear in your clipboard history.
+
+### Syncing Phone Screenshots
+
+You can send screenshots from your iPhone to ClippyBoard using an iOS Shortcut that saves them to the same folder ClippyBoard monitors (via iCloud Drive).
+
+**Setup:**
+
+1. Make sure your ClippyBoard screenshots folder is inside iCloud Drive (e.g. `iCloud Drive/screenshots`)
+2. On your iPhone, open the **Shortcuts** app
+3. Create a new shortcut called **Send Screenshots To Folder**
+4. Add these two actions:
+   - **Get the latest 1 screenshot** (from the Photos action)
+   - **Save *Latest Screenshots* to *screenshots*** (from the Files action — select the same iCloud Drive folder ClippyBoard watches)
+5. Tap **Done**
+
+**Usage:** Run the shortcut manually, add it to your Home Screen, or trigger it with a Back Tap or Action Button. The screenshot will sync via iCloud to your Mac and automatically appear in ClippyBoard.
 
 ---
 

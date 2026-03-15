@@ -14,6 +14,12 @@ class ScreenshotService: ObservableObject {
     private var processedScreenshots: Set<String> = []  // Track processed files to avoid duplicates
     private let bookmarkManager = SecurityScopedBookmarkManager.shared
 
+    // Directory watcher for synced files (e.g. phone screenshots via iCloud)
+    private var directorySource: DispatchSourceFileSystemObject?
+    private var directoryFileDescriptor: Int32 = -1
+
+    private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tiff", "bmp", "gif", "webp"]
+
     var onScreenshotCaptured: (() -> Void)?
 
     init() {
@@ -50,23 +56,70 @@ class ScreenshotService: ObservableObject {
             return
         }
 
+        // Snapshot existing files so we don't re-import them
+        snapshotExistingImages()
+
+        // Start Spotlight query for native macOS screenshots
+        startMetadataQuery()
+
+        // Start directory watcher for synced files (phone screenshots)
+        startDirectoryWatcher()
+
+        isMonitoring = true
+        AppLogger.screenshot.info("Started monitoring for screenshots and synced images")
+    }
+
+    func stopMonitoring() {
+        // Stop Spotlight query
+        query?.stop()
+        query = nil
+
+        // Stop directory watcher
+        directorySource?.cancel()
+        directorySource = nil
+        directoryFileDescriptor = -1
+
+        isMonitoring = false
+
+        NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidUpdate, object: nil)
+        NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidFinishGathering, object: nil)
+    }
+
+    // MARK: - Snapshot existing files
+
+    private func snapshotExistingImages() {
+        guard let folderURL = bookmarkManager.screenshotsFolderURL else { return }
+
+        do {
+            let contents = try bookmarkManager.contentsOfDirectory(at: folderURL)
+            for fileURL in contents {
+                if Self.imageExtensions.contains(fileURL.pathExtension.lowercased()) {
+                    processedScreenshots.insert(fileURL.path)
+                }
+            }
+            AppLogger.screenshot.info("Snapshot complete, found \(self.processedScreenshots.count) existing images")
+        } catch {
+            AppLogger.screenshot.warning("Failed to snapshot directory: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Spotlight metadata query (native macOS screenshots)
+
+    private func startMetadataQuery() {
         query = NSMetadataQuery()
         guard let query = query else { return }
 
-        // Search for screenshots using Spotlight metadata
+        // Search for native macOS screenshots only via Spotlight
         query.predicate = NSPredicate(format: "kMDItemIsScreenCapture == 1")
 
-        // Limit search to the authorized folder if possible
         if let folderURL = bookmarkManager.screenshotsFolderURL {
             query.searchScopes = [folderURL]
         } else {
             query.searchScopes = [NSMetadataQueryLocalComputerScope]
         }
 
-        // Sort by creation date, newest first
         query.sortDescriptors = [NSSortDescriptor(key: kMDItemFSCreationDate as String, ascending: false)]
 
-        // Observe for new results
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(queryDidUpdate),
@@ -82,27 +135,17 @@ class ScreenshotService: ObservableObject {
         )
 
         let started = query.start()
-        isMonitoring = started
-        AppLogger.screenshot.info("Started monitoring for screenshots: \(started)")
+        AppLogger.screenshot.info("Spotlight query started: \(started)")
 
         if !started {
-            AppLogger.screenshot.error("Failed to start query - check Full Disk Access permissions")
+            AppLogger.screenshot.error("Failed to start Spotlight query - check Full Disk Access permissions")
         }
-    }
-
-    func stopMonitoring() {
-        query?.stop()
-        query = nil
-        isMonitoring = false
-
-        NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidUpdate, object: nil)
-        NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidFinishGathering, object: nil)
     }
 
     @objc private func queryDidFinishGathering(_ notification: Notification) {
         query?.disableUpdates()
 
-        // On initial gather, just record existing screenshots so we don't import old ones
+        // Record existing screenshots so we don't import old ones
         if let query = query {
             for i in 0..<query.resultCount {
                 if let item = query.result(at: i) as? NSMetadataItem,
@@ -112,7 +155,7 @@ class ScreenshotService: ObservableObject {
             }
         }
 
-        AppLogger.screenshot.info("Initial gather complete, found \(self.processedScreenshots.count) existing screenshots")
+        AppLogger.screenshot.info("Spotlight gather complete, tracking \(self.processedScreenshots.count) existing files")
         query?.enableUpdates()
     }
 
@@ -126,38 +169,97 @@ class ScreenshotService: ObservableObject {
         }
 
         for item in addedItems {
-            processScreenshot(item)
+            processMetadataItem(item)
         }
 
         query?.enableUpdates()
     }
 
-    private func processScreenshot(_ item: NSMetadataItem) {
+    private func processMetadataItem(_ item: NSMetadataItem) {
         guard let path = item.value(forAttribute: kMDItemPath as String) as? String else { return }
 
         // Skip if already processed
         guard !processedScreenshots.contains(path) else { return }
         processedScreenshots.insert(path)
 
-        // Get creation date
         let creationDate = item.value(forAttribute: kMDItemFSCreationDate as String) as? Date ?? Date()
 
         // Only process screenshots from the last 30 seconds (avoid old ones on restart)
         guard Date().timeIntervalSince(creationDate) < 30 else {
-            AppLogger.screenshot.debug("Skipping old screenshot")
+            AppLogger.screenshot.debug("Skipping old screenshot via Spotlight")
             return
         }
 
-        AppLogger.screenshot.info("New screenshot detected")
+        AppLogger.screenshot.info("New native screenshot detected: \(path, privacy: .public)")
 
-        // Wait a moment for macOS to finish writing the file
         Task {
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-            await loadAndProcessScreenshot(path: path, creationDate: creationDate)
+            await loadAndProcessScreenshot(path: path, creationDate: creationDate, isNativeScreenshot: true)
         }
     }
 
-    private func loadAndProcessScreenshot(path: String, creationDate: Date) async {
+    // MARK: - Directory watcher (synced files like phone screenshots)
+
+    private func startDirectoryWatcher() {
+        guard let folderURL = bookmarkManager.screenshotsFolderURL else { return }
+
+        let fd = open(folderURL.path, O_EVTONLY)
+        guard fd >= 0 else {
+            AppLogger.screenshot.error("Failed to open directory for watching: \(folderURL.path, privacy: .public)")
+            return
+        }
+        directoryFileDescriptor = fd
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: .write,
+            queue: .main
+        )
+
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in
+                self?.scanForNewImages()
+            }
+        }
+
+        source.setCancelHandler {
+            close(fd)
+        }
+
+        source.resume()
+        directorySource = source
+        AppLogger.screenshot.info("Directory watcher started for: \(folderURL.path, privacy: .public)")
+    }
+
+    private func scanForNewImages() {
+        guard let folderURL = bookmarkManager.screenshotsFolderURL else { return }
+
+        do {
+            let contents = try bookmarkManager.contentsOfDirectory(at: folderURL)
+            for fileURL in contents {
+                let path = fileURL.path
+                let ext = fileURL.pathExtension.lowercased()
+
+                guard Self.imageExtensions.contains(ext) else { continue }
+                guard !processedScreenshots.contains(path) else { continue }
+                processedScreenshots.insert(path)
+
+                AppLogger.screenshot.info("New synced image detected: \(path, privacy: .public)")
+
+                Task {
+                    // Wait for the file to finish syncing/writing
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                    await loadAndProcessScreenshot(path: path, creationDate: Date(), isNativeScreenshot: false)
+                }
+            }
+        } catch {
+            AppLogger.screenshot.warning("Failed to scan directory: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Shared processing
+
+    private func loadAndProcessScreenshot(path: String, creationDate: Date, isNativeScreenshot: Bool = true) async {
         // Check if this path is in our authorized folder
         guard bookmarkManager.isPathAuthorized(path) else {
             AppLogger.screenshot.debug("Screenshot not in authorized folder, skipping: \(path, privacy: .public)")
@@ -200,7 +302,8 @@ class ScreenshotService: ObservableObject {
             imageData: pngData,
             extractedText: extractedText,
             sourcePath: path,
-            timestamp: creationDate
+            timestamp: creationDate,
+            isNativeScreenshot: isNativeScreenshot
         )
     }
 
@@ -238,7 +341,7 @@ class ScreenshotService: ObservableObject {
     }
 
     @MainActor
-    private func saveScreenshot(imageData: Data, extractedText: String, sourcePath: String, timestamp: Date) async {
+    private func saveScreenshot(imageData: Data, extractedText: String, sourcePath: String, timestamp: Date, isNativeScreenshot: Bool = true) async {
         guard let modelContainer = modelContainer else {
             AppLogger.screenshot.warning("No model container")
             return
@@ -257,8 +360,8 @@ class ScreenshotService: ObservableObject {
             textContent: extractedText.isEmpty ? nil : extractedText,
             contentType: ContentType.image.rawValue,
             timestamp: timestamp,
-            sourceApp: "com.apple.screencaptureui",
-            sourceAppName: "Screenshot",
+            sourceApp: isNativeScreenshot ? "com.apple.screencaptureui" : "com.apple.shortcuts",
+            sourceAppName: isNativeScreenshot ? "Screenshot" : "Phone Screenshot",
             searchableText: searchableText
         )
 

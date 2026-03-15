@@ -24,6 +24,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // This replaces LSUIElement which prevents Force Quit visibility
         NSApp.setActivationPolicy(.accessory)
 
+        // Enable launch at login on first run
+        if !UserDefaults.standard.bool(forKey: "hasSetLaunchAtLogin") {
+            LaunchAtLoginService.shared.isEnabled = true
+            UserDefaults.standard.set(true, forKey: "hasSetLaunchAtLogin")
+        }
+
         // Initialize model container
         setupModelContainer()
 
